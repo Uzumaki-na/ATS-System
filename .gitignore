@@ -140,10 +140,7 @@ logs/
 *.pth
 data/processed/
 data/cache/
-models/
 __pycache__/
 *.log
-
 datasets/
-data/
 *.csv

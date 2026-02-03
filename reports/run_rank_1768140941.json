@@ -1,0 +1,242 @@
+{
+  "input": {
+    "resume_dir": "datasets/category resumes/data/data/ACCOUNTANT",
+    "jd_file": "jds/ACCOUNTANT.txt",
+    "job_category": "ACCOUNTANT",
+    "mode": "api",
+    "api_url": "http://127.0.0.1:8000/rank",
+    "device": "",
+    "pipeline_top_k": 50,
+    "top_k": 10,
+    "min_chars": 400
+  },
+  "stats": {
+    "pdfs_found": 118,
+    "candidates_extracted": 118,
+    "pdfs_failed": 0,
+    "pdfs_too_short": 0
+  },
+  "runtime_seconds": 15.7907,
+  "results": [
+    {
+      "rank": 1,
+      "candidate_id": "49997097",
+      "final_score": 0.8066,
+      "raw_score": 0.8066,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8721511363983154,
+        "potential_fit": 0.07545067369937897,
+        "bad_fit": 0.0523982048034668
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1308,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\49997097.pdf"
+    },
+    {
+      "rank": 2,
+      "candidate_id": "28298773",
+      "final_score": 0.8043,
+      "raw_score": 0.8043,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8792996406555176,
+        "potential_fit": 0.07913684844970703,
+        "bad_fit": 0.0415634922683239
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1386,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\28298773.pdf"
+    },
+    {
+      "rank": 3,
+      "candidate_id": "43685045",
+      "final_score": 0.8018,
+      "raw_score": 0.8018,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8678274750709534,
+        "potential_fit": 0.0704919621348381,
+        "bad_fit": 0.06168056279420853
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9995
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1185,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\43685045.pdf"
+    },
+    {
+      "rank": 4,
+      "candidate_id": "36024962",
+      "final_score": 0.7975,
+      "raw_score": 0.7975,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8568543791770935,
+        "potential_fit": 0.08980334550142288,
+        "bad_fit": 0.05334226414561272
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1346,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\36024962.pdf"
+    },
+    {
+      "rank": 5,
+      "candidate_id": "23438112",
+      "final_score": 0.7971,
+      "raw_score": 0.7971,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8386809229850769,
+        "potential_fit": 0.1117648109793663,
+        "bad_fit": 0.049554307013750076
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1269,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\23438112.pdf"
+    },
+    {
+      "rank": 6,
+      "candidate_id": "21338490",
+      "final_score": 0.7962,
+      "raw_score": 0.7962,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8804644346237183,
+        "potential_fit": 0.08153151720762253,
+        "bad_fit": 0.03800401836633682
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9998
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1498,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\21338490.pdf"
+    },
+    {
+      "rank": 7,
+      "candidate_id": "19446337",
+      "final_score": 0.796,
+      "raw_score": 0.796,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8278157711029053,
+        "potential_fit": 0.11790747195482254,
+        "bad_fit": 0.05427686125040054
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1189,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\19446337.pdf"
+    },
+    {
+      "rank": 8,
+      "candidate_id": "20082776",
+      "final_score": 0.7958,
+      "raw_score": 0.7958,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8313500285148621,
+        "potential_fit": 0.11228329688310623,
+        "bad_fit": 0.05636663734912872
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9998
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1229,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\20082776.pdf"
+    },
+    {
+      "rank": 9,
+      "candidate_id": "21853199",
+      "final_score": 0.7957,
+      "raw_score": 0.7957,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8676524758338928,
+        "potential_fit": 0.08132356405258179,
+        "bad_fit": 0.051023930311203
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9998
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.117,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\21853199.pdf"
+    },
+    {
+      "rank": 10,
+      "candidate_id": "12065211",
+      "final_score": 0.7938,
+      "raw_score": 0.7938,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.8394708633422852,
+        "potential_fit": 0.10979989171028137,
+        "bad_fit": 0.05072929710149765
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.1098,
+      "processing_time": 15.7642,
+      "extracted_skills": [],
+      "file_path": "datasets\\category resumes\\data\\data\\ACCOUNTANT\\12065211.pdf"
+    }
+  ]
+}

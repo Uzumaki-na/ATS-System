@@ -1,0 +1,16 @@
+{
+  "job_category": "ACCOUNTANT",
+  "distractor_category": "INFORMATION-TECHNOLOGY",
+  "job_description": "We are hiring a Senior Accountant to own the monthly close and deliver accurate financial statements. Responsibilities include general ledger accounting, journal entries, accruals and prepaids, balance sheet reconciliations, AP/AR review, fixed assets and depreciation, variance analysis, and supporting external audit. Requirements: 3+ years accounting experience, strong Excel (pivot tables, VLOOKUP/XLOOKUP), knowledge of GAAP/IFRS, experience with ERP systems (SAP/Oracle/NetSuite) and/or QuickBooks, and strong attention to detail.\n",
+  "n_candidates": 40,
+  "n_job_category": 20,
+  "n_distractor_category": 20,
+  "metrics": {
+    "ndcg_at_5": 0.0,
+    "ndcg_at_10": 0.0,
+    "ndcg_at_20": 0.0,
+    "map": 0.0
+  },
+  "runtime_seconds": 15.388044118881226,
+  "results": []
+}

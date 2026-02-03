@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  triadrank-ats:
+    build:
+      context: .
+      target: production
+      args:
+        PYTHON_IMAGE: python:3.10-slim
+        API_HOST: 0.0.0.0
+        API_PORT: 8000
+        MODEL_DEVICE: cpu
+        UVICORN_WORKERS: 4
+    ports:
+      - "8000:8000"
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      MODEL_DEVICE: cpu
+      UVICORN_WORKERS: 4
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  triadrank-ats-gpu:
+    build:
+      context: .
+      target: gpu-production
+      args:
+        CUDA_IMAGE: nvidia/cuda:11.8-devel-ubuntu20.04
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu118
+        API_HOST: 0.0.0.0
+        API_PORT: 8000
+        MODEL_DEVICE: cuda
+        UVICORN_WORKERS: 4
+    ports:
+      - "8001:8000"
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      MODEL_DEVICE: cuda
+      UVICORN_WORKERS: 4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

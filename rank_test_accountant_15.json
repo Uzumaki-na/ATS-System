@@ -1,0 +1,67 @@
+{
+  "job_description": "We are hiring a Senior Accountant to own the monthly close and deliver accurate financial statements. Responsibilities include general ledger accounting, journal entries, accruals and prepaids, balance sheet reconciliations, AP/AR review, fixed assets and depreciation, variance analysis, and supporting external audit. Requirements: 3+ years accounting experience, strong Excel (pivot tables, VLOOKUP/XLOOKUP), knowledge of GAAP/IFRS, experience with ERP systems (SAP/Oracle/NetSuite) and/or QuickBooks, and strong attention to detail.",
+  "job_category": "ACCOUNTANT",
+  "candidates": [
+    {
+      "id": "acct_senior_strong_1",
+      "text": "SENIOR ACCOUNTANT\nExperience: 5 years. Owned month-end close, prepared financial statements, posted journal entries and accruals, performed balance sheet reconciliations, managed fixed assets and depreciation schedules, supported external audit and SOX testing. Tools: Excel (pivot tables, Power Query, VLOOKUP), NetSuite, SAP. Knowledge: GAAP, variance analysis, budgeting, AP/AR review." 
+    },
+    {
+      "id": "acct_mid_strong_2",
+      "text": "ACCOUNTANT\nExperience: 3 years in general ledger accounting. Monthly close, bank reconciliations, JE preparation, revenue recognition support, expense accruals, and account reconciliations. Tools: QuickBooks, Excel (pivot tables). Assisted in audit PBC schedules and financial reporting." 
+    },
+    {
+      "id": "acct_ap_ar_3",
+      "text": "ACCOUNTS PAYABLE / ACCOUNTS RECEIVABLE SPECIALIST\nExperience: 4 years. Processed vendor invoices, 3-way match, payment runs, handled collections, cash application, reconciled sub-ledgers to GL. Tools: SAP, Oracle, Excel. Worked closely with accounting during month-end close." 
+    },
+    {
+      "id": "acct_audit_4",
+      "text": "AUDIT ASSOCIATE\nExperience: 2.5 years in external audit. Performed walkthroughs, tested controls, substantive testing, prepared audit workpapers, reviewed client financial statements, and communicated findings. Knowledge: GAAP, materiality, sampling. Tools: Excel, audit software." 
+    },
+    {
+      "id": "acct_tax_5",
+      "text": "TAX ANALYST\nExperience: 3 years. Prepared corporate tax returns, assisted with tax provision, reconciled deferred taxes, supported audits for tax-related items. Strong Excel. Familiar with GAAP reporting and accounting close timelines." 
+    },
+    {
+      "id": "acct_fpna_6",
+      "text": "FINANCIAL ANALYST (FP&A)\nExperience: 4 years. Budgeting, forecasting, variance analysis, building financial models, partnering with business stakeholders. Tools: Excel, Power BI. Limited hands-on journal entry / close ownership but strong finance fundamentals." 
+    },
+    {
+      "id": "acct_bookkeeper_7",
+      "text": "BOOKKEEPER\nExperience: 6 years. Managed bookkeeping for small businesses, handled AP/AR, bank reconciliations, monthly reporting, payroll coordination, and QuickBooks Online setup. Strong attention to detail and client communication." 
+    },
+    {
+      "id": "acct_controller_8",
+      "text": "ASSISTANT CONTROLLER\nExperience: 7 years. Led close process, reviewed reconciliations, managed GL team, improved internal controls, coordinated external audits, and ensured GAAP compliance. ERP: Oracle NetSuite. Excel advanced." 
+    },
+    {
+      "id": "acct_payroll_9",
+      "text": "PAYROLL SPECIALIST\nExperience: 5 years managing payroll cycles, tax withholdings, benefits deductions, and payroll reconciliations. Tools: ADP, Excel. Some month-end reconciliation experience but not full GL ownership." 
+    },
+    {
+      "id": "acct_procurement_10",
+      "text": "PROCUREMENT ANALYST\nExperience: 4 years managing purchase orders, vendor onboarding, spend analysis, contract support, and invoice troubleshooting. Tools: SAP Ariba, Excel. Worked with AP teams but not GL / close." 
+    },
+    {
+      "id": "acct_hr_11",
+      "text": "HR GENERALIST\nExperience: 5 years in HR operations, onboarding, employee relations, benefits administration, and policy compliance. Tools: Workday, Excel. No accounting close or reconciliations." 
+    },
+    {
+      "id": "acct_sales_12",
+      "text": "SALES EXECUTIVE\nExperience: 6 years in B2B sales, lead generation, pipeline management, negotiations, and CRM reporting. Tools: Salesforce. No accounting responsibilities." 
+    },
+    {
+      "id": "acct_it_13",
+      "text": "SOFTWARE ENGINEER\nExperience: 4 years building backend APIs in Python and Node.js. Deployed on AWS using Docker and Kubernetes. Databases: PostgreSQL, Redis. Built CI/CD pipelines and monitoring." 
+    },
+    {
+      "id": "acct_data_14",
+      "text": "DATA ANALYST\nExperience: 4 years. SQL, Excel, Tableau/Power BI. Built dashboards for finance stakeholders, automated monthly reporting, supported variance analysis with data insights. Limited GL/journal entry work." 
+    },
+    {
+      "id": "acct_student_15",
+      "text": "JUNIOR ACCOUNTING INTERN\nExperience: Internship assisting with AP processing, expense reports, bank reconciliations, and preparing simple journal entries under supervision. Education: B.Com in Accounting. Strong Excel basics." 
+    }
+  ],
+  "top_k": 10
+}

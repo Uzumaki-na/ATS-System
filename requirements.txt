@@ -1,0 +1,5 @@
+# TriadRank ATS - Requirements
+# Use requirements-prod.txt for runtime dependencies.
+# Use requirements-dev.txt for development/test tooling.
+
+-r requirements-prod.txt

@@ -1,0 +1,472 @@
+{
+  "job_category": "ACCOUNTANT",
+  "distractor_category": "INFORMATION-TECHNOLOGY",
+  "job_description": "We are hiring a Senior Accountant to own the monthly close and deliver accurate financial statements. Responsibilities include general ledger accounting, journal entries, accruals and prepaids, balance sheet reconciliations, AP/AR review, fixed assets and depreciation, variance analysis, and supporting external audit. Requirements: 3+ years accounting experience, strong Excel (pivot tables, VLOOKUP/XLOOKUP), knowledge of GAAP/IFRS, experience with ERP systems (SAP/Oracle/NetSuite) and/or QuickBooks, and strong attention to detail.",
+  "input": {
+    "pdf_dir": "datasets/category resumes/data/data",
+    "n_job_requested": 20,
+    "n_distractor_requested": 20,
+    "min_chars": 400,
+    "pipeline_top_k": 100,
+    "top_k_returned": 20,
+    "seed": 42,
+    "use_api": true,
+    "api_url": "http://127.0.0.1:8000/rank"
+  },
+  "candidates_total": 40,
+  "runtime_seconds": 12.2372,
+  "summary": {
+    "topn": 20,
+    "true_category_counts": {
+      "ACCOUNTANT": 18,
+      "INFORMATION-TECHNOLOGY": 2
+    },
+    "predicted_category_counts": {
+      "ACCOUNTANT": 18,
+      "INFORMATION-TECHNOLOGY": 2
+    },
+    "category_match_rate": 0.9
+  },
+  "results": [
+    {
+      "rank": 1,
+      "candidate_id": "ACCOUNTANT::14224370",
+      "final_score": 0.527,
+      "raw_score": 0.527,
+      "label": "Good Fit",
+      "label_probabilities": {
+        "good_fit": 0.37342366576194763,
+        "potential_fit": 0.28852570056915283,
+        "bad_fit": 0.33805060386657715
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9815
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0909,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 2,
+      "candidate_id": "ACCOUNTANT::18132924",
+      "final_score": 0.5125,
+      "raw_score": 0.5125,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.31335633993148804,
+        "potential_fit": 0.2879554033279419,
+        "bad_fit": 0.39868825674057007
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0568,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 3,
+      "candidate_id": "ACCOUNTANT::29999135",
+      "final_score": 0.5103,
+      "raw_score": 0.5103,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.300064355134964,
+        "potential_fit": 0.29340043663978577,
+        "bad_fit": 0.40653523802757263
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0736,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 4,
+      "candidate_id": "ACCOUNTANT::27573855",
+      "final_score": 0.51,
+      "raw_score": 0.51,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.30880680680274963,
+        "potential_fit": 0.2915653884410858,
+        "bad_fit": 0.39962780475616455
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0765,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 5,
+      "candidate_id": "ACCOUNTANT::11759079",
+      "final_score": 0.4946,
+      "raw_score": 0.4946,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.2742980420589447,
+        "potential_fit": 0.26456424593925476,
+        "bad_fit": 0.46113771200180054
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0437,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 6,
+      "candidate_id": "ACCOUNTANT::16237710",
+      "final_score": 0.4928,
+      "raw_score": 0.4928,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.324675589799881,
+        "potential_fit": 0.24710404872894287,
+        "bad_fit": 0.42822039127349854
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0435,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 7,
+      "candidate_id": "ACCOUNTANT::12065211",
+      "final_score": 0.4899,
+      "raw_score": 0.4899,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.2924078106880188,
+        "potential_fit": 0.27385005354881287,
+        "bad_fit": 0.43374207615852356
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0675,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 8,
+      "candidate_id": "ACCOUNTANT::25862026",
+      "final_score": 0.4792,
+      "raw_score": 0.4792,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.27616018056869507,
+        "potential_fit": 0.248531773686409,
+        "bad_fit": 0.47530803084373474
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0864,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 9,
+      "candidate_id": "ACCOUNTANT::23438112",
+      "final_score": 0.4745,
+      "raw_score": 0.4745,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.2691468596458435,
+        "potential_fit": 0.2596357762813568,
+        "bad_fit": 0.4712173640727997
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.085,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 10,
+      "candidate_id": "ACCOUNTANT::25127518",
+      "final_score": 0.4713,
+      "raw_score": 0.4713,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.23527312278747559,
+        "potential_fit": 0.24966055154800415,
+        "bad_fit": 0.5150663256645203
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0638,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 11,
+      "candidate_id": "ACCOUNTANT::35554162",
+      "final_score": 0.4711,
+      "raw_score": 0.4711,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.26190438866615295,
+        "potential_fit": 0.23989592492580414,
+        "bad_fit": 0.4981997013092041
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0609,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 12,
+      "candidate_id": "ACCOUNTANT::18669563",
+      "final_score": 0.4637,
+      "raw_score": 0.4637,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.21128860116004944,
+        "potential_fit": 0.2124616652727127,
+        "bad_fit": 0.5762497186660767
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0314,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 13,
+      "candidate_id": "ACCOUNTANT::13130984",
+      "final_score": 0.4445,
+      "raw_score": 0.4445,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.21851417422294617,
+        "potential_fit": 0.1987796425819397,
+        "bad_fit": 0.5827062129974365
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.059,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 14,
+      "candidate_id": "ACCOUNTANT::13491889",
+      "final_score": 0.4366,
+      "raw_score": 0.4366,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.17532607913017273,
+        "potential_fit": 0.1969251036643982,
+        "bad_fit": 0.6277487874031067
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0701,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 15,
+      "candidate_id": "ACCOUNTANT::13701259",
+      "final_score": 0.4359,
+      "raw_score": 0.4359,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.1758996993303299,
+        "potential_fit": 0.21644508838653564,
+        "bad_fit": 0.6076552271842957
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0426,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 16,
+      "candidate_id": "ACCOUNTANT::17306905",
+      "final_score": 0.4234,
+      "raw_score": 0.4234,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.1488216072320938,
+        "potential_fit": 0.21089263260364532,
+        "bad_fit": 0.6402857899665833
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9997
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0757,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 17,
+      "candidate_id": "ACCOUNTANT::80053367",
+      "final_score": 0.4232,
+      "raw_score": 0.4232,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.15478304028511047,
+        "potential_fit": 0.19201889634132385,
+        "bad_fit": 0.6531980633735657
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0318,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 18,
+      "candidate_id": "ACCOUNTANT::27980446",
+      "final_score": 0.407,
+      "raw_score": 0.407,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.1578131765127182,
+        "potential_fit": 0.1722547560930252,
+        "bad_fit": 0.6699320673942566
+      },
+      "category": {
+        "predicted": "ACCOUNTANT",
+        "match": true,
+        "confidence": 0.9999
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0629,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "ACCOUNTANT"
+    },
+    {
+      "rank": 19,
+      "candidate_id": "INFORMATION-TECHNOLOGY::29975124",
+      "final_score": 0.213,
+      "raw_score": 0.426,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.20644614100456238,
+        "potential_fit": 0.2357853204011917,
+        "bad_fit": 0.5577685236930847
+      },
+      "category": {
+        "predicted": "INFORMATION-TECHNOLOGY",
+        "match": false,
+        "confidence": 0.9996
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0352,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "INFORMATION-TECHNOLOGY"
+    },
+    {
+      "rank": 20,
+      "candidate_id": "INFORMATION-TECHNOLOGY::23864648",
+      "final_score": 0.1914,
+      "raw_score": 0.3828,
+      "label": "Bad Fit",
+      "label_probabilities": {
+        "good_fit": 0.14779339730739594,
+        "potential_fit": 0.1455143243074417,
+        "bad_fit": 0.7066922783851624
+      },
+      "category": {
+        "predicted": "INFORMATION-TECHNOLOGY",
+        "match": false,
+        "confidence": 1.0
+      },
+      "skill_overlap": 0.0,
+      "keyword_overlap": 0.0284,
+      "processing_time": 12.1438,
+      "extracted_skills": [],
+      "true_category": "INFORMATION-TECHNOLOGY"
+    }
+  ]
+}

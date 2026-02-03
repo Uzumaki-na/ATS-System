@@ -1,0 +1,66 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Virtual envs
+.env
+.env.*
+.venv/
+venv/
+ats_env/
+
+# Test/cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+htmlcov/
+.cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.whl
+
+# Outputs
+logs/
+reports/
+
+# Large data/artifacts
+datasets/
+checkpoints/
+models/
+data/raw/
+data/processed/
+data/cache/
+
+# Large file types
+**/*.pdf
+**/*.csv
+**/*.tsv
+**/*.parquet
+**/*.feather
+**/*.npz
+**/*.npy
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.bin
+**/*.tar
+**/*.gz
+**/*.zip
+**/*.7z
+**/*.joblib

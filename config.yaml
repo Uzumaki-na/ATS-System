@@ -1,0 +1,320 @@
+# TriadRank ATS Configuration
+# 3-Tier Resume Scoring and Ranking System
+
+# ============================================
+# MODEL PATHS AND SETTINGS
+# ============================================
+models:
+  # Model 1: Cross-Encoder (Deep Ranking)
+  cross_encoder:
+    name: "cross_encoder"
+    pretrained_model: "bert-base-uncased"
+    max_seq_length: 512
+    hidden_size: 768
+    dropout: 0.1
+    regression_head_units: 256
+    classification_head_units: 128
+    num_classes: 3  # Good Fit, Potential Fit, Bad Fit
+    learning_rate: 2e-5
+    weight_decay: 0.01
+    warmup_steps: 500
+    epochs: 20
+    batch_size: 16
+    eval_batch_size: 32
+    gradient_accumulation_steps: 4
+    fp16: true  # Mixed precision training
+    save_path: "models/cross_encoder.pt"
+
+  # Model 2: Category Encoder (Gatekeeper)
+  category_encoder:
+    name: "category_encoder"
+    pretrained_model: "distilbert-base-uncased"
+    max_seq_length: 256
+    hidden_size: 768
+    dropout: 0.1
+    num_classes: 24
+    learning_rate: 3e-5
+    weight_decay: 0.01
+    warmup_steps: 200
+    epochs: 10
+    batch_size: 32
+    eval_batch_size: 64
+    fp16: false
+    save_path: "models/category_encoder.pt"
+
+  # Model 3: Extractor & Miner
+  extractor:
+    name: "extractor"
+    model_type: "spacy"  # or "bilstm_crf"
+    spacy_model: "checkpoints/extractor/extractor_model"
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.1
+    learning_rate: 1e-4
+    epochs: 50
+    batch_size: 32
+    save_path: "models/extractor.pt"
+
+# ============================================
+# INFERENCE SETTINGS
+# ============================================
+inference:
+  device: "cuda"  # "cuda", "cpu", or "auto"
+  batch_size: 32
+  num_workers: 4
+  pin_memory: true
+  top_k: 50  # Number of candidates to pass from Tier 3 to Tier 2
+  threshold_score: 0.3  # Minimum score threshold for ranking
+  timeout_seconds: 300  # Maximum inference time
+  tier3:
+    use_skill_overlap: false
+    keyword_weight: 0.4
+    skill_weight: 0.6
+    enable_custom_rules: false
+
+# ============================================
+# PENALTY WEIGHTS
+# ============================================
+penalties:
+  category_mismatch: 0.5  # Penalty for resume-job category mismatch
+  low_confidence: 0.8     # Penalty for low model confidence
+  missing_skills: 0.7     # Penalty for missing required skills
+  experience_gap: 0.85    # Penalty for experience mismatch
+
+# ============================================
+# 24 JOB CATEGORIES
+# ============================================
+categories:
+  id_to_name:
+    0: "ACCOUNTANT"
+    1: "ADVOCATE"
+    2: "AGRICULTURE"
+    3: "APPAREL"
+    4: "ARTS"
+    5: "AUTOMOBILE"
+    6: "AVIATION"
+    7: "BANKING"
+    8: "BPO"
+    9: "BUSINESS-DEVELOPMENT"
+    10: "CHEF"
+    11: "CONSTRUCTION"
+    12: "CONSULTANT"
+    13: "DESIGNER"
+    14: "DIGITAL-MEDIA"
+    15: "ENGINEERING"
+    16: "FINANCE"
+    17: "FITNESS"
+    18: "HEALTHCARE"
+    19: "HUMAN-RESOURCES"
+    20: "INFORMATION-TECHNOLOGY"
+    21: "PUBLIC-RELATIONS"
+    22: "SALES"
+    23: "TEACHER"
+
+  name_to_id:
+    "ACCOUNTANT": 0
+    "ADVOCATE": 1
+    "AGRICULTURE": 2
+    "APPAREL": 3
+    "ARTS": 4
+    "AUTOMOBILE": 5
+    "AVIATION": 6
+    "BANKING": 7
+    "BPO": 8
+    "BUSINESS-DEVELOPMENT": 9
+    "CHEF": 10
+    "CONSTRUCTION": 11
+    "CONSULTANT": 12
+    "DESIGNER": 13
+    "DIGITAL-MEDIA": 14
+    "ENGINEERING": 15
+    "FINANCE": 16
+    "FITNESS": 17
+    "HEALTHCARE": 18
+    "HUMAN-RESOURCES": 19
+    "INFORMATION-TECHNOLOGY": 20
+    "PUBLIC-RELATIONS": 21
+    "SALES": 22
+    "TEACHER": 23
+
+# ============================================
+# ENTITY TYPES FOR EXTRACTION
+# ============================================
+entity_types:
+  skills:
+    - "programming_language"
+    - "framework"
+    - "database"
+    - "tool"
+    - "soft_skill"
+    - "certification"
+  experience:
+    - "company"
+    - "job_title"
+    - "duration"
+    - "description"
+  education:
+    - "degree"
+    - "institution"
+    - "field_of_study"
+    - "graduation_date"
+  personal:
+    - "name"
+    - "email"
+    - "phone"
+    - "location"
+    - "linkedin"
+
+# ============================================
+# DATA PATHS - CUSTOMIZED FOR USER DATASETS
+# ============================================
+data:
+  raw:
+    # Model 1: Cross-Encoder Data (Score Dataset)
+    cross_encoder:
+      train: "datasets/score dataset/train.csv"
+      validation: "datasets/score dataset/validation.csv"
+      # Schema: text, ats_score, original_label
+
+    # Model 2: Category Encoder Data (Category Resumes)
+    category_csv: "datasets/category resumes/Resume/Resume.csv"
+    category_pdf_dir: "datasets/category resumes/data/data"
+    # Schema: ID, Resume_str, Resume_html, Category
+    # PDF Directory contains subdirectories for each job category with PDF resumes
+
+    # Model 3: Extractor & Retrieval Data (Bi-Encoder Retrieval Dataset)
+    extraction_pairs: "datasets/bi encoder retrieval dataset/resume_data_for_ranking.csv"
+    # Schema: career_objective, skills, positions, work_experience, education, etc.
+
+  processed:
+    cross_encoder_pairs: "data/processed/cross_encoder_pairs.pt"
+    category_data: "data/processed/category_data.pt"
+    extraction_data: "data/processed/extraction_data.pt"
+    pdf_text_cache: "data/processed/pdf_text_cache.json"
+  cache: "data/cache"
+  logs: "logs"
+
+# ============================================
+# PDF PROCESSING SETTINGS
+# ============================================
+pdf_processing:
+  enabled: true
+  extract_images: false  # Set true if resumes contain image-based text
+  min_text_length: 50    # Minimum characters to consider valid extraction
+  cache_enabled: true    # Cache extracted text to avoid reprocessing
+  supported_formats:
+    - ".pdf"
+  extraction_method: "pypdf"  # pypdf, pdfplumber, or "auto" for best available
+
+  processed:
+    cross_encoder_pairs: "data/processed/cross_encoder_pairs.pt"
+    category_data: "data/processed/category_data.pt"
+    extraction_data: "data/processed/extraction_data.pt"
+  cache: "data/cache"
+  logs: "logs"
+
+# ============================================
+# DATASET SCHEMAS AND FORMATS
+# ============================================
+dataset_schemas:
+  cross_encoder:
+    text_column: "text"
+    score_column: "ats_score"
+    label_column: "original_label"
+    # Labels are: good_fit, potential_fit, bad_fit
+    label_mapping:
+      good_fit: 2
+      potential_fit: 1
+      bad_fit: 0
+
+  category_encoder:
+    id_column: "ID"
+    resume_text_column: "Resume_str"
+    resume_html_column: "Resume_html"
+    category_column: "Category"
+
+  extractor:
+    # Columns to extract and use for retrieval
+    text_columns:
+      - "career_objective"
+      - "skills"
+      - "work_experience"
+      - "education"
+      - "positions"
+      - "companies"
+      - "project_details"
+    id_column: "ID"
+
+# ============================================
+# HARD NEGATIVE MINING SETTINGS
+# ============================================
+hard_negative_mining:
+  enabled: true
+  similarity_threshold: 0.7  # Consider negatives with similarity above this
+  max_negatives_per_positive: 5
+  mining_batch_size: 1000
+  use_gpu: true
+
+# ============================================
+# LOGGING SETTINGS
+# ============================================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/training.log"
+  max_file_size: "100MB"
+  backup_count: 5
+
+# ============================================
+# EVALUATION METRICS
+# ============================================
+evaluation:
+  cross_encoder:
+    metrics:
+      - "mse"
+      - "mae"
+      - "accuracy"
+      - "f1_macro"
+      - "f1_weighted"
+    thresholds:
+      good_fit: 0.75
+      potential_fit: 0.5
+  category_encoder:
+    metrics:
+      - "accuracy"
+      - "f1_macro"
+      - "f1_weighted"
+      - "confusion_matrix"
+  extractor:
+    metrics:
+      - "precision"
+      - "recall"
+      - "f1"
+      - "entity_accuracy"
+
+# ============================================
+# API SETTINGS
+# ============================================
+api:
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+  workers: 4
+  cors_origins:
+    - "*"
+  rate_limit: 100  # requests per minute
+
+# ============================================
+# DOCKER SETTINGS
+# ============================================
+docker:
+  base_image: "python:3.10-slim"
+  python_packages:
+    - "torch>=2.0.0"
+    - "transformers>=4.30.0"
+    - "fastapi>=0.100.0"
+    - "spacy>=3.6.0"
+    - "scikit-learn>=1.3.0"
+    - "pandas>=2.0.0"
+    - "numpy>=1.24.0"
+  gpu_enabled: true

@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Lab — TriadRank ATS Showcase</title>
+<meta name="description" content="An interactive technical showcase demonstrating a machine learning-based ATS (Applicant Tracking System) scorer. See exactly how resumes are parsed, vectorized, and scored against job descriptions.">
+
+<!-- Design System Typography -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+
+<!-- Tailwind CSS v3 for utility classes -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  corePlugins: { preflight: false },  /* we use our own reset */
+  theme: { extend: {} }
+}
+</script>
+
+<!-- Custom Design System -->
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23000'/><rect x='4' y='4' width='24' height='24' fill='%23f9f9f6'/><text x='16' y='22' text-anchor='middle' font-family='monospace' font-size='18' font-weight='bold' fill='%23000ff'>L</text></svg>">
+</head>
+<body>
+
+<!-- ============================================
+     Navigation
+     ============================================ -->
+<nav class="nav-bar" aria-label="Main navigation">
+  <a href="#abstract" class="nav-brand" onclick="Router.navigate('abstract')" aria-label="Home">
+    <span class="brand-dot"></span>
+    THE LAB
+  </a>
+  <ul class="nav-links">
+    <li><a href="#abstract" data-page="abstract" class="active">Abstract</a></li>
+    <li><a href="#sandbox" data-page="sandbox">Sandbox</a></li>
+    <li><a href="#results" data-page="results">Results</a></li>
+    <li><a href="#methodology" data-page="methodology">Methodology</a></li>
+  </ul>
+  <div class="nav-toolbar">
+    <button class="nav-icon-btn" aria-label="Settings" title="Settings">
+      <span class="material-symbols-outlined">settings</span>
+    </button>
+    <button class="nav-icon-btn" aria-label="Terminal" title="Terminal">
+      <span class="material-symbols-outlined">terminal</span>
+    </button>
+    <button class="nav-cta-btn" onclick="Router.navigate('sandbox')" aria-label="Execute Analysis">
+      Execute Analysis
+      <span class="material-symbols-outlined" style="font-size:16px;line-height:1">arrow_forward</span>
+    </button>
+  </div>
+</nav>
+
+<!-- ============================================
+     Error Banner (hidden by default)
+     ============================================ -->
+<div class="error-banner" id="error-banner" role="alert">
+  <span>⚠</span>
+  <span id="error-message">An error occurred.</span>
+</div>
+
+<!-- ============================================
+     SCREEN 1: The Abstract (Landing)
+     ============================================ -->
+<main>
+  <div id="page-abstract" class="page active">
+    <section class="abstract-page" aria-label="Abstract">
+
+      <!-- Dark Hero -->
+      <div class="abstract-hero">
+        <div class="abstract-hero-glow-2"></div>
+        <div class="abstract-hero-content">
+
+          <h1 class="abstract-title">
+            <span class="highlight">TriadRank</span> ATS
+          </h1>
+          <p class="abstract-subtitle mono">
+            TriadRank Research Group &middot; July 2026 &middot; v1.0.0
+          </p>
+
+          <div class="abstract-hero-text">
+            <p>
+              We present <strong>TriadRank</strong>, a three-tier machine learning pipeline
+              for resume scoring and ranking in applicant tracking systems. Unlike conventional
+              ATS platforms that treat candidate matching as a black-box keyword density problem,
+              TriadRank decomposes scoring into three transparent stages&thinsp;&mdash;&thinsp;entity
+              extraction, category validation, and deep semantic cross-encoding&thinsp;&mdash;&thinsp;each
+              independently inspectable and explainable.
+            </p>
+          </div>
+
+          <!-- ASCII System Diagram -->
+          <div class="abstract-diagram" aria-label="System architecture diagram">
+<pre>
+┌─────────────────────────────────────────────────────────────┐
+│                  TriadRank Pipeline Architecture              │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
+│  │  TIER 3      │    │  TIER 2      │    │  TIER 1      │   │
+│  │  Extractor   │───→│  Category    │───→│  Cross-      │   │
+│  │  (spaCy NER) │    │  Encoder     │    │  Encoder     │   │
+│  │              │    │  (DistilBERT) │    │  (BERT-base) │   │
+│  │  Skills      │    │  24 Classes  │    │  Regression  │   │
+│  │  Keyword     │    │  Penalty     │    │  3-Class     │   │
+│  │  Overlap     │    │  Logic       │    │  Label       │   │
+│  └──────────────┘    └──────────────┘    └──────────────┘   │
+│         │                    │                    │           │
+│         ▼                    ▼                    ▼           │
+│  ┌─────────────────────────────────────────────────────┐     │
+│  │              Final Score & Rank Table                │     │
+│  └─────────────────────────────────────────────────────┘     │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+</pre>
+          </div>
+
+          <div class="abstract-cta-row">
+            <button class="btn btn-hero" onclick="Router.navigate('sandbox')">
+              Start Sandbox →
+            </button>
+            <button class="btn btn-hero-secondary" onclick="Router.navigate('results')">
+              View Sample Results
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Light body section below hero -->
+      <div class="abstract-body-section">
+        <div class="abstract-container reveal">
+          <h2>Why TriadRank?</h2>
+          <p>
+            This interactive showcase lets you submit job descriptions and resume datasets,
+            then observe the pipeline compute match scores in real time. Every intermediate
+            representation&thinsp;&mdash;&thinsp;from extracted skills and keyword Jaccard overlaps
+            to category-encoder confidence scores and BERT-based cross-attention similarities&thinsp;&mdash;&thinsp;
+            is surfaced through explorable visualizations. Our aim is to replace trust in
+            the algorithm with trust in the evidence.
+          </p>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- ============================================
+       SCREEN 2: Input Sandbox
+       ============================================ -->
+  <div id="page-sandbox" class="page">
+    <section class="sandbox-page" aria-label="Input Sandbox">
+
+      <!-- Category selector bar -->
+      <div style="padding:8px 24px;background:var(--color-surface);border-bottom:var(--border-hard);display:flex;align-items:center;gap:12px">
+        <label for="category-select" class="mono" style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-muted)">
+          Category:
+        </label>
+        <select id="category-select" class="mono" style="font-size:13px;padding:4px 8px;border:var(--border-hard);background:var(--color-surface);cursor:pointer">
+          <option value="ENGINEERING">ENGINEERING</option>
+          <option value="INFORMATION-TECHNOLOGY">INFORMATION TECHNOLOGY</option>
+          <option value="FINANCE">FINANCE</option>
+          <option value="HEALTHCARE">HEALTHCARE</option>
+          <option value="SALES">SALES</option>
+          <option value="CONSULTANT">CONSULTANT</option>
+          <option value="DESIGNER">DESIGNER</option>
+          <option value="ACCOUNTANT">ACCOUNTANT</option>
+        </select>
+      </div>
+
+      <!-- Sandbox needs pb for bottom bar -->
+      <div style="display:flex;flex:1;min-height:0;padding-bottom:80px">
+        <!-- Left Pane: Job Description -->
+        <div class="sandbox-pane">
+          <div class="sandbox-pane-header">
+            <span>Job Description</span>
+            <span class="badge">.txt</span>
+          </div>
+          <textarea
+            id="jd-text"
+            class="jd-textarea"
+            placeholder="[Paste standard job description here...]"
+            aria-label="Job description text"
+            spellcheck="false"
+          >Senior Machine Learning Engineer
+
+We are looking for a Senior Machine Learning Engineer to join our AI team. You will design and implement ML models for production systems, work with large-scale datasets, and deploy models using MLOps best practices.
+
+Requirements:
+&bull; 5+ years experience in ML engineering
+&bull; Strong proficiency in Python, PyTorch, and scikit-learn
+&bull; Experience with NLP and transformer architectures (BERT, GPT)
+&bull; Knowledge of distributed training and model serving
+&bull; Familiarity with Docker, Kubernetes, and cloud platforms (AWS/GCP)
+
+Nice to have:
+&bull; Experience with RAG systems and vector databases
+&bull; Published research in ML conferences
+&bull; MLOps tooling (MLflow, Kubeflow)</textarea>
+        </div>
+
+        <!-- Right Pane: Resume Upload -->
+        <div class="sandbox-pane grid-bg">
+          <div class="sandbox-pane-header">
+            <span>Resume Dataset</span>
+            <span class="badge" id="file-count">0 files</span>
+          </div>
+          <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Drop resume files here">
+            <div class="dropzone-icon">⤓</div>
+            <div class="dropzone-text">
+              Drop .PDF or .TXT files here<br>
+              or click to browse
+            </div>
+          </div>
+          <input type="file" id="file-input" accept=".pdf,.txt" multiple hidden aria-hidden="true">
+          <div class="terminal-overlay" id="terminal-output" aria-label="Pipeline execution log"></div>
+        </div>
+      </div>
+
+      <!-- Sticky Bottom Action Bar -->
+      <div class="bottom-action-bar" id="sandbox-bottom-bar">
+        <span class="action-status" id="sandbox-status">
+          <span class="status-dot"></span>
+          SYSTEM STATUS: READY FOR INGESTION
+        </span>
+        <div style="display:flex;align-items:center;gap:12px">
+          <button class="btn btn-secondary btn-sm" id="btn-reset" style="margin:0">Reset</button>
+          <button class="action-btn" id="btn-execute">
+            <span class="material-symbols-outlined" style="font-size:16px">account_tree</span>
+            Initialize Inference
+          </button>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- ============================================
+       SCREEN 3: Results Matrix
+       ============================================ -->
+  <div id="page-results" class="page">
+    <section class="results-page" aria-label="Results Matrix">
+
+      <!-- Sidebar -->
+      <aside class="results-sidebar" id="results-sidebar" aria-label="Pipeline parameters">
+        <h3>Pipeline Parameters</h3>
+        <div class="param-group">
+          <div class="param-label">Weighting</div>
+          <div class="param-value">Semantic: 0.30</div>
+          <div class="param-value">Keyword: 0.25</div>
+          <div class="param-value">Experience: 0.20</div>
+          <div class="param-value">Education: 0.15</div>
+          <div class="param-value">Skills: 0.10</div>
+        </div>
+        <div class="param-group">
+          <div class="param-label">Penalties</div>
+          <div class="param-value">Category mismatch: &times;0.50</div>
+          <div class="param-value">Low confidence: &times;0.80</div>
+          <div class="param-value">Missing skills: &times;0.70</div>
+          <div class="param-value">Experience gap: &times;0.85</div>
+        </div>
+      </aside>
+
+      <!-- Main Table -->
+      <div class="results-main">
+        <div class="results-toolbar">
+          <span class="results-count" id="results-count">Run sandbox to see results</span>
+          <button class="btn btn-secondary btn-sm" onclick="Router.navigate('sandbox')">
+            &larr; Back to Sandbox
+          </button>
+        </div>
+        <div class="results-table-wrapper" id="results-content">
+          <div class="results-empty">
+            <div class="results-empty-icon">&empty;</div>
+            <div class="results-empty-text">
+              No results yet. Run the sandbox to score candidates against a job description.
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="Router.navigate('sandbox')">
+              Go to Sandbox &rarr;
+            </button>
+          </div>
+        </div>
+        <!-- Terminal Log Section (hidden until results) -->
+        <div id="terminal-log-container" style="display:none;padding:24px 24px 24px 24px;background:var(--color-paper-bg)">
+          <div class="terminal-log" id="results-terminal-log">
+            <div class="terminal-log-header">
+              <span>System Log</span>
+              <span class="material-symbols-outlined" style="font-size:16px">terminal</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pagination (hidden until results) -->
+        <div id="pagination-container" style="display:none">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- ============================================
+       SCREEN 4: Methodology (Documentation)
+       ============================================ -->
+  <div id="page-methodology" class="page">
+    <section class="methodology-page" aria-label="Methodology">
+
+      <!-- Sidebar TOC -->
+      <nav class="methodology-sidebar" aria-label="Table of contents">
+        <h4>Contents</h4>
+        <ul class="toc-list">
+          <li><a href="#method-overview">1. Overview</a></li>
+          <li><a href="#method-architecture">2. Architecture</a></li>
+          <li><a href="#method-tier3">3. Tier 3: Extractor</a></li>
+          <li><a href="#method-tier2">4. Tier 2: Category Encoder</a></li>
+          <li><a href="#method-tier1">5. Tier 1: Cross-Encoder</a></li>
+          <li><a href="#method-scoring">6. Scoring & Ranking</a></li>
+          <li><a href="#method-bias">7. Bias Mitigation</a></li>
+          <li><a href="#method-references">8. References</a></li>
+        </ul>
+        <!-- Metadata -->
+        <div class="sidebar-metadata" style="margin-top:32px;padding-top:24px;border-top:1px solid var(--color-outline)">
+          <div class="meta-row"><span class="meta-label">Version</span><span class="meta-value">v1.0.0</span></div>
+          <div class="meta-row"><span class="meta-label">Status</span><span class="meta-value">Peer Review</span></div>
+          <div class="meta-row"><span class="meta-label">Date</span><span class="meta-value">2026-07</span></div>
+        </div>
+      </nav>
+
+      <!-- Content -->
+      <div class="methodology-content">
+
+        <section id="method-overview">
+          <div class="section-badge">RESEARCH PAPER <span>|</span> TRIADRANK-2026</div>
+          <h2>1. Overview</h2>
+          <p>
+            TriadRank is a three-tier resume scoring and ranking system designed for
+            transparent, explainable applicant tracking. Unlike monolithic black-box
+            approaches, TriadRank decomposes the scoring problem into three independently
+            inspectable stages, each using a specialized model architecture.
+          </p>
+          <p>
+            The system processes resumes through a cascading pipeline: coarse filtering
+            via entity extraction and keyword overlap, category validation via a DistilBERT
+            classifier, and deep semantic scoring via a BERT-based cross-encoder. Each tier
+            produces intermediate results that are surfaced through the interactive
+            visualization layer.
+          </p>
+        </section>
+
+        <section id="method-architecture">
+          <h2>2. Architecture</h2>
+          <p>
+            The pipeline is organized as a strict linear cascade. Each tier reduces the
+            candidate set before passing results to the next, enabling efficient processing
+            of large resume pools.
+          </p>
+          <div class="math-block">
+            score(candidate, JD) = f<sub>ce</sub>(candidate, JD) &middot; P(category)
+          </div>
+          <p>
+            Where <em>f<sub>ce</sub></em> is the cross-encoder regression score and
+            <em>P(category)</em> is the category penalty factor (1.0 for matches,
+            0.5 for mismatches).
+          </p>
+        </section>
+
+        <section id="method-tier3">
+          <h2>3. Tier 3: Entity Extractor</h2>
+          <p>
+            The first tier uses a fine-tuned <strong>spaCy NER</strong> model to extract
+            structured entities from unstructured resume text. It identifies skills,
+            experience, education, and personal information using a combination of
+            pre-trained named entity recognition and custom pattern-matching rules.
+          </p>
+          <h3>Keyword Overlap (Jaccard)</h3>
+          <p>
+            A fast, interpretable baseline score computed as the Jaccard similarity
+            between tokenized resume text and job description:
+          </p>
+          <div class="math-block">
+            J(A, B) = |A &cap; B| &frasl; |A &cup; B|
+          </div>
+          <div class="code-block-window">
+            <div class="code-block-window-header">
+              <div class="code-block-window-dots">
+                <span class="dot-red"></span>
+                <span class="dot-yellow"></span>
+                <span class="dot-green"></span>
+              </div>
+              <span class="code-block-window-title">keyword_overlap.py</span>
+            </div>
+            <pre><code><span class="kw">def</span> <span class="fn">keyword_overlap</span>(resume: <span class="typ">str</span>, jd: <span class="typ">str</span>) &rarr; <span class="typ">float</span>:
+    tokens_r = <span class="fn">set</span>(<span class="fn">tokenize</span>(resume.lower()))
+    tokens_j = <span class="fn">set</span>(<span class="fn">tokenize</span>(jd.lower()))
+    <span class="kw">if</span> <span class="kw">not</span> tokens_r <span class="kw">or</span> <span class="kw">not</span> tokens_j:
+        <span class="kw">return</span> <span class="num">0.0</span>
+    <span class="kw">return</span> <span class="fn">len</span>(tokens_r &amp; tokens_j) / <span class="fn">len</span>(tokens_r | tokens_j)</code></pre>
+          </div>
+          <h3>Skill Overlap</h3>
+          <p>
+            Beyond simple keyword matching, the extractor maintains a curated skill
+            taxonomy and computes overlap between detected resume skills and required
+            job description skills. This provides a semantically richer signal than
+            raw token overlap.
+          </p>
+        </section>
+
+        <section id="method-tier2">
+          <h2>4. Tier 2: Category Encoder</h2>
+          <p>
+            The second tier uses a <strong>DistilBERT</strong>-based classifier to predict
+            the job category of each resume from 24 predefined categories. The predicted
+            category is compared to the target category; mismatches apply a configurable
+            penalty to the final score.
+          </p>
+          <div class="code-block-window">
+            <div class="code-block-window-header">
+              <div class="code-block-window-dots">
+                <span class="dot-red"></span>
+                <span class="dot-yellow"></span>
+                <span class="dot-green"></span>
+              </div>
+              <span class="code-block-window-title">category_encoder.py</span>
+            </div>
+            <pre><code><span class="kw">class</span> <span class="fn">CategoryEncoder</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="kw">self</span>, config):
+        <span class="kw">super</span>().<span class="fn">__init__</span>()
+        <span class="kw">self</span>.encoder = AutoModel.<span class="fn">from_pretrained</span>(
+            config[<span class="str">'pretrained_model'</span>]
+        )
+        <span class="kw">self</span>.classifier = nn.<span class="fn">Linear</span>(
+            config[<span class="str">'hidden_size'</span>], config[<span class="str">'num_classes'</span>]
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="kw">self</span>, input_ids, attention_mask):
+        output = <span class="kw">self</span>.encoder(
+            input_ids, attention_mask=attention_mask
+        )
+        pooled = output.last_hidden_state[:, <span class="num">0</span>, :]
+        <span class="kw">return</span> <span class="kw">self</span>.classifier(pooled)</code></pre>
+          </div>
+          <p>
+            The category encoder achieves <strong>~85% accuracy</strong> across the 24
+            categories. The penalty factor for mismatches is configurable via
+            <code>config.yaml</code> (default: 0.5).
+          </p>
+        </section>
+
+        <section id="method-tier1">
+          <h2>5. Tier 1: Cross-Encoder</h2>
+          <p>
+            The final scoring tier uses a <strong>BERT-base</strong> cross-encoder that
+            jointly encodes the resume-job description pair and produces both a
+            regression score (0&ndash;1) and a three-class classification label
+            (Good Fit / Potential Fit / Bad Fit).
+          </p>
+          <p>
+            The cross-encoder takes the concatenated resume and job description text
+            (separated by a <code>[SEP]</code> token), processes it through the full
+            transformer stack, and feeds the <code>[CLS]</code> representation to
+            dual prediction heads:
+          </p>
+          <ul style="font-family:var(--font-mono);font-size:13px;margin:16px 0;padding-left:24px;line-height:2">
+            <li><strong>Regression head:</strong> 768 &rarr; 256 &rarr; 1 (sigmoid)</li>
+            <li><strong>Classification head:</strong> 768 &rarr; 128 &rarr; 3 (softmax)</li>
+          </ul>
+          <div class="code-block-window">
+            <div class="code-block-window-header">
+              <div class="code-block-window-dots">
+                <span class="dot-red"></span>
+                <span class="dot-yellow"></span>
+                <span class="dot-green"></span>
+              </div>
+              <span class="code-block-window-title">cross_encoder.py</span>
+            </div>
+            <pre><code><span class="kw">class</span> <span class="fn">MultiHeadCrossEncoder</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="kw">self</span>, config):
+        <span class="kw">super</span>().<span class="fn">__init__</span>()
+        <span class="kw">self</span>.encoder = AutoModel.<span class="fn">from_pretrained</span>(
+            config[<span class="str">'pretrained_model'</span>]
+        )
+        <span class="kw">self</span>.regression_head = nn.<span class="fn">Sequential</span>(
+            nn.<span class="fn">Linear</span>(config[<span class="str">'hidden_size'</span>],
+                      config[<span class="str">'regression_head_units'</span>]),
+            nn.<span class="fn">ReLU</span>(),
+            nn.<span class="fn">Dropout</span>(config[<span class="str">'dropout'</span>]),
+            nn.<span class="fn">Linear</span>(config[<span class="str">'regression_head_units'</span>], <span class="num">1</span>),
+            nn.<span class="fn">Sigmoid</span>()
+        )
+        <span class="kw">self</span>.classification_head = nn.<span class="fn">Sequential</span>(
+            nn.<span class="fn">Linear</span>(config[<span class="str">'hidden_size'</span>],
+                      config[<span class="str">'classification_head_units'</span>]),
+            nn.<span class="fn">ReLU</span>(),
+            nn.<span class="fn">Dropout</span>(config[<span class="str">'dropout'</span>]),
+            nn.<span class="fn">Linear</span>(config[<span class="str">'classification_head_units'</span>],
+                      config[<span class="str">'num_classes'</span>])
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="kw">self</span>, input_ids, attention_mask):
+        output = <span class="kw">self</span>.encoder(
+            input_ids, attention_mask=attention_mask
+        )
+        cls = output.last_hidden_state[:, <span class="num">0</span>, :]
+        score = <span class="kw">self</span>.regression_head(cls).<span class="fn">squeeze</span>(<span class="op">-</span><span class="num">1</span>)
+        logits = <span class="kw">self</span>.classification_head(cls)
+        <span class="kw">return</span> score, logits</code></pre>
+          </div>
+        </section>
+
+        <section id="method-scoring">
+          <h2>6. Scoring &amp; Ranking</h2>
+          <p>
+            The final score for each candidate is computed as the cross-encoder regression
+            output multiplied by the category penalty factor:
+          </p>
+          <div class="math-block">
+            score<sub>final</sub> = score<sub>ce</sub> &times;
+            penalty(category<sub>pred</sub>, category<sub>target</sub>)
+          </div>
+          <p>
+            Candidates are sorted by descending final score. The pipeline evaluates all
+            candidates through Tier 3, passes the top-<em>K</em> to Tier 2, and the
+            surviving candidates to Tier 1. This tiered filtering ensures O(n) scaling
+            with candidate pool size.
+          </p>
+        </section>
+
+        <section id="method-bias">
+          <h2>7. Bias Mitigation</h2>
+          <p>
+            TriadRank incorporates several bias mitigation strategies:
+          </p>
+          <ul style="font-family:var(--font-mono);font-size:13px;margin:16px 0;padding-left:24px;line-height:2">
+            <li><strong>Text normalization:</strong> Strips HTML, normalizes whitespace, removes PII-like patterns from input before scoring</li>
+            <li><strong>Category penalty transparency:</strong> Category mismatch penalties are explicit and configurable, not hidden in the score</li>
+            <li><strong>Score decomposition:</strong> Every score component is visualized individually, preventing hidden weighting biases</li>
+            <li><strong>Threshold reporting:</strong> Label thresholds (good-fit &ge; 0.75, potential-fit &ge; 0.5) are documented and surfaced in the UI</li>
+          </ul>
+        </section>
+
+        <section id="method-references">
+          <h2>8. References</h2>
+          <ol style="font-family:var(--font-mono);font-size:13px;margin:16px 0;padding-left:24px;line-height:2">
+            <li>Devlin, J. et al. (2019). "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding." NAACL.</li>
+            <li>Sanh, V. et al. (2019). "DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter." NeurIPS Workshop.</li>
+            <li>Honnibal, M. &amp; Montani, I. (2017). "spaCy 2: Natural language understanding with Bloom embeddings, convolutional neural networks and incremental parsing."</li>
+            <li>Wolf, T. et al. (2020). "Transformers: State-of-the-Art Natural Language Processing." EMNLP.</li>
+          </ol>
+        </section>
+
+      </div>
+    </section>
+  </div>
+
+</main>
+
+<!-- ============================================
+     Inference Details Modal (Screen 5 — overlay)
+     ============================================ -->
+<div class="modal-backdrop" id="detail-backdrop" aria-hidden="true">
+  <div class="modal" id="detail-modal" role="dialog" aria-modal="true" aria-label="Candidate inference details">
+    <!-- Content rendered by DetailModal -->
+  </div>
+</div>
+
+<!-- ============================================
+     Scripts
+     ============================================ -->
+<script src="app.js"></script>
+
+<footer style="display:none">
+  <!-- Footer is not used in this SPA design -->
+</footer>
+
+</body>
+</html>

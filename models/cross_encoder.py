@@ -3,12 +3,17 @@ Model 1: Cross-Encoder for Deep Resume-Job Scoring
 Multi-head architecture for regression and classification.
 """
 
+import logging
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from tqdm import tqdm
 from transformers import AutoModel
 from typing import Dict, Tuple, Optional
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class MultiHeadCrossEncoder(nn.Module):
@@ -49,7 +54,8 @@ class MultiHeadCrossEncoder(nn.Module):
         # Dropout layer
         self.dropout = nn.Dropout(dropout)
         
-        # Regression Head for scoring
+        # Regression Head for scoring (no Sigmoid — raw logits with MSE is
+        # more numerically stable; clamped at inference time).
         self.regression_head = nn.Sequential(
             nn.Linear(encoder_output_size, regression_head_units),
             nn.ReLU(),
@@ -58,7 +64,6 @@ class MultiHeadCrossEncoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(regression_head_units // 2, 1),
-            nn.Sigmoid()  # Output between 0 and 1
         )
         
         # Classification Head for labels
@@ -167,7 +172,7 @@ class MultiHeadCrossEncoder(nn.Module):
         predicted_class = torch.argmax(probs, dim=-1)
         
         return {
-            'score': outputs['regression_score'],
+            'score': torch.clamp(outputs['regression_score'], 0.0, 1.0),
             'predicted_class': predicted_class,
             'probabilities': probs,
             'logits': outputs['classification_logits']
@@ -181,11 +186,12 @@ class MultiHeadCrossEncoder(nn.Module):
         target_class: torch.Tensor,
         regression_weight: float = 0.5,
         classification_weight: float = 0.5,
-        token_type_ids: Optional[torch.Tensor] = None
+        token_type_ids: Optional[torch.Tensor] = None,
+        class_weights: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Calculate combined loss for training.
-        
+
         Args:
             input_ids: Token IDs
             attention_mask: Attention mask
@@ -193,35 +199,43 @@ class MultiHeadCrossEncoder(nn.Module):
             target_class: Target class labels
             regression_weight: Weight for regression loss
             classification_weight: Weight for classification loss
-            
+            class_weights: Optional weight per class for imbalanced datasets
+
         Returns:
             Tuple of (total_loss, loss_dict)
         """
         outputs = self.forward(input_ids, attention_mask, token_type_ids=token_type_ids)
-        
-        # Regression loss (MSE)
-        regression_loss_fn = nn.MSELoss()
-        regression_loss = regression_loss_fn(outputs['regression_score'], target_score)
-        
-        # Classification loss (Cross-Entropy)
-        classification_loss_fn = nn.CrossEntropyLoss()
-        classification_loss = classification_loss_fn(
+
+        # Regression loss (MSE) — use functional, not nn.MSELoss() instantiated per call
+        regression_loss = F.mse_loss(outputs['regression_score'], target_score)
+
+        # Classification loss (Cross-Entropy with label smoothing + optional class weights)
+        classification_loss = F.cross_entropy(
             outputs['classification_logits'],
-            target_class
+            target_class,
+            weight=class_weights,
+            label_smoothing=0.1,
         )
-        
+
         # Combined loss
         total_loss = (
-            regression_weight * regression_loss + 
+            regression_weight * regression_loss +
             classification_weight * classification_loss
         )
-        
+
+        # NaN/Inf guard — catch numerical instability. Replaces loss with a
+        # zero-valued tensor connected to the model graph so backward() doesn't
+        # crash. The gradient signal is zero → no weight update for this batch.
+        loss_is_bad = not torch.isfinite(total_loss)
+        if loss_is_bad:
+            total_loss = (regression_weight * outputs['regression_score'] * 0.0).sum()
+
         loss_dict = {
-            'total_loss': total_loss.item(),
-            'regression_loss': regression_loss.item(),
-            'classification_loss': classification_loss.item()
+            'total_loss': 0.0 if loss_is_bad else total_loss.item(),
+            'regression_loss': 0.0 if loss_is_bad else regression_loss.item(),
+            'classification_loss': 0.0 if loss_is_bad else classification_loss.item()
         }
-        
+
         return total_loss, loss_dict
     
     @classmethod
@@ -276,6 +290,15 @@ class MultiHeadCrossEncoder(nn.Module):
         
         return model
 
+    def set_class_weights(self, weights: torch.Tensor) -> None:
+        """Store class weights for weighted cross-entropy loss.
+
+        Args:
+            weights: Float tensor of shape (num_classes,) with inverse-frequency
+                     or custom per-class weights.
+        """
+        self.register_buffer('_class_weights', weights)
+
 
 class CrossEncoderTrainer:
     """Training utilities for Cross-Encoder."""
@@ -288,52 +311,96 @@ class CrossEncoderTrainer:
         warmup_steps: int = 500,
         gradient_accumulation_steps: int = 4,
         fp16: bool = False,
-        device: str = 'cuda'
+        device: str = 'cuda',
+        total_training_steps: int | None = None,
+        fused_adam: bool = False,
+        torch_compile: bool = False,
+        class_weights: Optional[torch.Tensor] = None,
     ):
         self.model = model
         self.device = device
         self.fp16 = fp16
         self.gradient_accumulation_steps = gradient_accumulation_steps
-        
-        # Optimizer setup
-        self.optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay
-        )
-        
-        # Learning rate scheduler
+        self.class_weights = class_weights
+
+        # Optional torch.compile — fuse ops, reduce Python overhead (~20-30%).
+        # Triton handles kernel compilation; cache dir avoids recompiling each run.
+        if torch_compile and hasattr(torch, 'compile'):
+            import os as _os
+            _os.environ.setdefault(
+                'TORCHINDUCTOR_CACHE_DIR',
+                _os.path.join(_os.path.dirname(__file__), '..', 'cache', 'torch_inductor'),
+            )
+            self.model = torch.compile(self.model)
+        elif torch_compile:
+            logger.warning("torch.compile requested but not available (requires PyTorch >= 2.0)")
+
+        # Optimizer with optional fused kernels (requires CUDA + PyTorch >= 2.0)
+        adam_kwargs = {'lr': learning_rate, 'weight_decay': weight_decay}
+        if fused_adam and device == 'cuda':
+            try:
+                self.optimizer = torch.optim.AdamW(model.parameters(), fused=True, **adam_kwargs)
+            except (TypeError, RuntimeError):
+                self.optimizer = torch.optim.AdamW(model.parameters(), **adam_kwargs)
+        else:
+            self.optimizer = torch.optim.AdamW(model.parameters(), **adam_kwargs)
+
+        # Learning rate scheduler: warmup then cosine decay to 1e-6
         if warmup_steps and warmup_steps > 0:
-            self.scheduler = torch.optim.lr_scheduler.LinearLR(
+            warmup = torch.optim.lr_scheduler.LinearLR(
                 self.optimizer,
                 start_factor=0.1,
                 end_factor=1.0,
-                total_iters=warmup_steps
+                total_iters=warmup_steps,
             )
+            if total_training_steps and total_training_steps > warmup_steps:
+                cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer,
+                    T_max=total_training_steps - warmup_steps,
+                    eta_min=1e-6,
+                )
+                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    self.optimizer,
+                    schedulers=[warmup, cosine],
+                    milestones=[warmup_steps],
+                )
+            else:
+                self.scheduler = warmup
         else:
             self.scheduler = torch.optim.lr_scheduler.ConstantLR(
-                self.optimizer,
-                factor=1.0,
-                total_iters=1
+                self.optimizer, factor=1.0, total_iters=1
             )
-        
+
         # Gradient scaler for FP16
         self.scaler = torch.cuda.amp.GradScaler() if fp16 else None
     
     def train_epoch(
         self,
         dataloader,
+        epoch: int = 1,
         regression_weight: float = 0.5,
         classification_weight: float = 0.5
     ) -> Dict[str, float]:
-        """Train for one epoch."""
+        """Train for one epoch with a live progress bar."""
         self.model.train()
         total_loss = 0
         total_regression_loss = 0
         total_classification_loss = 0
         loss_counts = 0
-        
-        for batch_idx, batch in enumerate(dataloader):
+        running_loss = 0.0
+        running_reg = 0.0
+        running_cls = 0.0
+        log_interval = max(1, self.gradient_accumulation_steps)
+
+        pbar = tqdm(
+            dataloader,
+            desc=f"Epoch {epoch}",
+            unit="batch",
+            ncols=100,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]  {postfix}"
+        )
+
+        for batch_idx, batch in enumerate(pbar):
             # Move to device
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
@@ -342,7 +409,7 @@ class CrossEncoderTrainer:
                 token_type_ids = token_type_ids.to(self.device)
             target_score = batch['score'].to(self.device)
             target_class = batch['label'].to(self.device)
-            
+
             # Mixed precision training
             if self.fp16:
                 with torch.cuda.amp.autocast():
@@ -353,9 +420,9 @@ class CrossEncoderTrainer:
                         token_type_ids=token_type_ids
                     )
                     loss = loss / self.gradient_accumulation_steps
-                
+
                 self.scaler.scale(loss).backward()
-                
+
                 if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -368,22 +435,41 @@ class CrossEncoderTrainer:
                     input_ids, attention_mask,
                     target_score, target_class,
                     regression_weight, classification_weight,
-                    token_type_ids=token_type_ids
+                    token_type_ids=token_type_ids,
+                    class_weights=self.class_weights,
                 )
                 loss = loss / self.gradient_accumulation_steps
                 loss.backward()
-                
+
                 if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     self.scheduler.step()
-            
+
             total_loss += loss_dict['total_loss']
             total_regression_loss += loss_dict.get('regression_loss', 0.0)
             total_classification_loss += loss_dict.get('classification_loss', 0.0)
             loss_counts += 1
-        
+
+            # Update running averages for the progress bar
+            running_loss += loss_dict['total_loss']
+            running_reg += loss_dict.get('regression_loss', 0.0)
+            running_cls += loss_dict.get('classification_loss', 0.0)
+
+            if (batch_idx + 1) % log_interval == 0:
+                avg = max(1, log_interval)
+                pbar.set_postfix(
+                    loss=f"{running_loss / avg:.4f}",
+                    reg=f"{running_reg / avg:.4f}",
+                    cls=f"{running_cls / avg:.4f}"
+                )
+                running_loss = 0.0
+                running_reg = 0.0
+                running_cls = 0.0
+
+        pbar.close()
+
         return {
             'avg_loss': total_loss / loss_counts,
             'regression_loss': total_regression_loss / loss_counts,
@@ -392,15 +478,22 @@ class CrossEncoderTrainer:
     
     @torch.no_grad()
     def evaluate(self, dataloader) -> Dict[str, float]:
-        """Evaluate model on validation set."""
+        """Evaluate model on validation set (single forward pass per batch)."""
         self.model.eval()
         total_loss = 0
         all_predictions = []
         all_targets = []
         all_scores = []
         all_score_targets = []
-        
-        for batch in dataloader:
+
+        pbar = tqdm(
+            dataloader,
+            desc="Validate",
+            unit="batch",
+            ncols=80,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
+        )
+        for batch in pbar:
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
             token_type_ids = batch.get('token_type_ids', None)
@@ -408,25 +501,36 @@ class CrossEncoderTrainer:
                 token_type_ids = token_type_ids.to(self.device)
             target_score = batch['score'].to(self.device)
             target_class = batch['label'].to(self.device)
-            
-            predictions = self.model.predict(input_ids, attention_mask, token_type_ids=token_type_ids)
-            
-            # Calculate losses
-            _, loss_dict = self.model.get_loss(
-                input_ids, attention_mask,
-                target_score, target_class,
-                token_type_ids=token_type_ids
+
+            # Single forward pass — compute outputs, then derive
+            # predictions AND loss from the same outputs (was 2× forward).
+            outputs = self.model.forward(
+                input_ids, attention_mask, token_type_ids=token_type_ids
             )
-            
-            total_loss += loss_dict['total_loss']
-            all_predictions.extend(predictions['predicted_class'].cpu().tolist())
+
+            # ── Loss from outputs ──────────────────────────────────────
+            reg_loss = F.mse_loss(outputs['regression_score'], target_score)
+            cls_loss = F.cross_entropy(
+                outputs['classification_logits'], target_class, label_smoothing=0.1
+            )
+            batch_loss = (0.5 * reg_loss + 0.5 * cls_loss).item()
+            total_loss += batch_loss
+
+            # ── Predictions from outputs ───────────────────────────────
+            probs = torch.softmax(outputs['classification_logits'], dim=-1)
+            pred_class = torch.argmax(probs, dim=-1)
+            scores = torch.clamp(outputs['regression_score'], 0.0, 1.0)
+
+            all_predictions.extend(pred_class.cpu().tolist())
             all_targets.extend(target_class.cpu().tolist())
-            all_scores.extend(predictions['score'].cpu().tolist())
+            all_scores.extend(scores.cpu().tolist())
             all_score_targets.extend(target_score.cpu().tolist())
-        
+
+        pbar.close()
+
         # Calculate metrics
         from sklearn.metrics import accuracy_score, mean_squared_error, f1_score
-        
+
         metrics = {
             'val_loss': total_loss / len(dataloader),
             'accuracy': accuracy_score(all_targets, all_predictions),
@@ -434,7 +538,7 @@ class CrossEncoderTrainer:
             'f1_macro': f1_score(all_targets, all_predictions, average='macro'),
             'f1_weighted': f1_score(all_targets, all_predictions, average='weighted')
         }
-        
+
         return metrics
     
     def save_checkpoint(self, path: str, epoch: int, metrics: Dict):

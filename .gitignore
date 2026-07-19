@@ -3,6 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# MLflow tracking database and artifacts
+mlflow.db
+mlruns/
+
+# Data files (large datasets not stored in git)
+datasets/
 # C extensions
 *.so
 
@@ -144,3 +150,40 @@ __pycache__/
 *.log
 datasets/
 *.csv
+
+# Generated reports and evaluation output
+reports/
+
+# Tool artifacts (may regenerate)
+.impeccable/
+.playwright-cli/
+_bmad/
+_bmad-output/
+
+# Generated reference documents (keep locally, not in repo)
+ANALYSIS_REPORT.md
+PRODUCT.md
+design.md
+design-artifacts/
+
+# Generated evaluation output
+evaluation_report.csv
+evaluation_report.json
+rank_test_accountant_15.json
+
+# Generated skill/entity data
+skill_db_relax_20.json
+token_dist.json
+data/skill_db.json  # regenerate via scripts/build_skill_db.py
+
+# Standalone utility scripts (not imported by the core pipeline)
+scripts/evaluate_models.py
+scripts/generate_resume_pdfs.py
+
+# VS Code extension (keep locally)
+kickbacks.vsix
+
+# Debug / unused artifacts
+debug_line.txt
+DejaVuSans.ttf
+DejaVuSans-Bold.ttf

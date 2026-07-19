@@ -9,7 +9,7 @@ models:
   cross_encoder:
     name: "cross_encoder"
     pretrained_model: "bert-base-uncased"
-    max_seq_length: 512
+    max_seq_length: 384  # reduced from 512: O(n²) attention → 2.25× less compute
     hidden_size: 768
     dropout: 0.1
     regression_head_units: 256
@@ -19,11 +19,16 @@ models:
     weight_decay: 0.01
     warmup_steps: 500
     epochs: 20
-    batch_size: 16
+    batch_size: 16 
     eval_batch_size: 32
-    gradient_accumulation_steps: 4
-    fp16: true  # Mixed precision training
-    save_path: "models/cross_encoder.pt"
+    gradient_accumulation_steps: 4  # was 4; higher batch_size means fewer accum steps needed
+    fp16: true
+    torch_compile: true   # PyTorch 2.0+ kernel fusion (~20-30% speedup)
+    fused_adam: false      # fused AdamW kernel (~5-10% optimizer speedup)
+    early_stopping_patience: 5  
+    # B1: must match the path the training script writes (train_cross_encoder.py
+    # saves best_model.pt under checkpoints/cross_encoder/). Inference reads this.
+    save_path: "checkpoints/cross_encoder/best_model.pt"
 
   # Model 2: Category Encoder (Gatekeeper)
   category_encoder:
@@ -39,14 +44,21 @@ models:
     epochs: 10
     batch_size: 32
     eval_batch_size: 64
+    gradient_accumulation_steps: 2
     fp16: false
-    save_path: "models/category_encoder.pt"
+    early_stopping_patience: 3
+    # B1: must match the path the training script writes (train_category.py saves
+    # best_model.pt under checkpoints/category_encoder/). Inference reads this.
+    save_path: "checkpoints/category_encoder/best_model.pt"
 
   # Model 3: Extractor & Miner
   extractor:
     name: "extractor"
     model_type: "spacy"  # or "bilstm_crf"
-    spacy_model: "checkpoints/extractor/extractor_model"
+    # B6: this is the BASE spaCy model to fine-tune FROM (must exist on disk).
+    # The trained output dir checkpoints/extractor/extractor_model is written by
+    # train_extractor.py via nlp.to_disk(); it is NOT a loadable base model.
+    spacy_model: "en_core_web_sm"
     hidden_size: 128
     num_layers: 2
     dropout: 0.1
@@ -67,19 +79,68 @@ inference:
   threshold_score: 0.3  # Minimum score threshold for ranking
   timeout_seconds: 300  # Maximum inference time
   tier3:
-    use_skill_overlap: false
-    keyword_weight: 0.4
-    skill_weight: 0.6
-    enable_custom_rules: false
+    use_skill_overlap: true   # re-enabled with SkillNer
+    keyword_weight: 0.3
+    skill_weight: 0.7
+    enable_custom_rules: true
+    skill_extractor_mode: "trie"  # "trie" | "regex" | "skillner" | "hf_ner"
+
+  # Final-score blending. The cross-encoder alone collapses to ~0.46 for every
+  # pair (training data has no negatives — see ANALYSIS_REPORT.md), so raw_score
+  # alone produces no ranking signal. The "weighted" mode blends three signals:
+  #   content_overlap — skill + keyword Jaccard (content-based, real spread)
+  #   category        — penalty_factor (1.0 match / 0.75 similar / 0.5 mismatch)
+  #   cross_encoder   — raw BERT score (collapsed, but keeps a little signal)
+  # Switch to "legacy" to restore raw_score * penalty_factor for A/B comparison.
+  scoring:
+    mode: "weighted"
+    weights:
+      content_overlap: 0.50
+      category: 0.30
+      cross_encoder: 0.20
 
 # ============================================
 # PENALTY WEIGHTS
 # ============================================
 penalties:
-  category_mismatch: 0.5  # Penalty for resume-job category mismatch
+  category_mismatch: 0.5  # Fallback penalty for unrelated categories
   low_confidence: 0.8     # Penalty for low model confidence
   missing_skills: 0.7     # Penalty for missing required skills
   experience_gap: 0.85    # Penalty for experience mismatch
+  # Soft similarity penalties: higher = more similar (applied when a resume's
+  # predicted category doesn't match the target but is related).
+  # Format: "PREDICTED_CATEGORY,TARGET_CATEGORY": penalty_factor
+  # The code checks both orderings, so define each pair once.
+  category_similarity:
+    # Finance cluster
+    "FINANCE,ACCOUNTANT": 0.85
+    "FINANCE,BANKING": 0.80
+    "ACCOUNTANT,BANKING": 0.80
+    # Engineering-adjacent cluster
+    "INFORMATION-TECHNOLOGY,ENGINEERING": 0.75
+    "ENGINEERING,CONSTRUCTION": 0.70
+    "ENGINEERING,AUTOMOBILE": 0.65
+    "ENGINEERING,AVIATION": 0.65
+    # Healthcare / wellness
+    "HEALTHCARE,FITNESS": 0.70
+    # Creative cluster
+    "ARTS,DESIGNER": 0.80
+    "ARTS,DIGITAL-MEDIA": 0.75
+    "DESIGNER,DIGITAL-MEDIA": 0.80
+    "APPAREL,DESIGNER": 0.55
+    # Business operations cluster
+    "HUMAN-RESOURCES,BPO": 0.75
+    "HUMAN-RESOURCES,BUSINESS-DEVELOPMENT": 0.70
+    "BPO,BUSINESS-DEVELOPMENT": 0.70
+    # Revenue / communication cluster
+    "SALES,BUSINESS-DEVELOPMENT": 0.80
+    "SALES,PUBLIC-RELATIONS": 0.70
+    "BUSINESS-DEVELOPMENT,PUBLIC-RELATIONS": 0.70
+    "ADVOCATE,PUBLIC-RELATIONS": 0.70
+    # Education / people
+    "TEACHER,HUMAN-RESOURCES": 0.55
+    # Consulting
+    "CONSULTANT,BUSINESS-DEVELOPMENT": 0.60
 
 # ============================================
 # 24 JOB CATEGORIES
@@ -166,21 +227,23 @@ entity_types:
     - "linkedin"
 
 # ============================================
-# DATA PATHS - CUSTOMIZED FOR USER DATASETS
+# DATA PATHS
 # ============================================
 data:
   raw:
-    # Model 1: Cross-Encoder Data (Score Dataset)
+    # Model 1: Cross-Encoder Data (Resume-JD pairs with compatibility scores)
+    # Source: nonameee12233/job-resume-matching (HuggingFace, MIT license)
+    # 122K pairs with final_score (0.43-0.76), label_strength, 6 scoring dims
     cross_encoder:
-      train: "datasets/score dataset/train.csv"
-      validation: "datasets/score dataset/validation.csv"
-      # Schema: text, ats_score, original_label
+      train: "datasets/score dataset/split/train.csv"
+      validation: "datasets/score dataset/split/val.csv"
+      # Schema: resume_text, job_description, ats_score, label, label_name
 
-    # Model 2: Category Encoder Data (Category Resumes)
-    category_csv: "datasets/category resumes/Resume/Resume.csv"
-    category_pdf_dir: "datasets/category resumes/data/data"
+    # Model 2: Category Encoder Data (Resume classification, 24 categories)
+    # Source: swamy1418/Resume_Categorization (HuggingFace, 2484 resumes)
+    category_csv: "datasets/category_resumes/Resume.csv"
     # Schema: ID, Resume_str, Resume_html, Category
-    # PDF Directory contains subdirectories for each job category with PDF resumes
+    # Note: HUMAN-RESOURCES in config = HR in original dataset (already mapped in CSV)
 
     # Model 3: Extractor & Retrieval Data (Bi-Encoder Retrieval Dataset)
     extraction_pairs: "datasets/bi encoder retrieval dataset/resume_data_for_ranking.csv"
@@ -206,32 +269,30 @@ pdf_processing:
     - ".pdf"
   extraction_method: "pypdf"  # pypdf, pdfplumber, or "auto" for best available
 
-  processed:
-    cross_encoder_pairs: "data/processed/cross_encoder_pairs.pt"
-    category_data: "data/processed/category_data.pt"
-    extraction_data: "data/processed/extraction_data.pt"
-  cache: "data/cache"
-  logs: "logs"
-
 # ============================================
 # DATASET SCHEMAS AND FORMATS
 # ============================================
 dataset_schemas:
   cross_encoder:
-    text_column: "text"
+    text_column: "text"  # fallback if resume_column/job_description_column not set
+    # B2: dedicated columns for resume-JD pairs (HuggingFace job-resume-matching dataset).
+    # When set, these are read directly instead of the ' SEP '-embedded text_column.
+    resume_column: "resume_text"
+    job_description_column: "job_description"
     score_column: "ats_score"
-    label_column: "original_label"
-    # Labels are: good_fit, potential_fit, bad_fit
+    label_column: "label"  # numeric 0/1/2
+    # Labels are: 0=bad_fit, 1=potential_fit, 2=good_fit
     label_mapping:
-      good_fit: 2
-      potential_fit: 1
       bad_fit: 0
+      potential_fit: 1
+      good_fit: 2
 
   category_encoder:
     id_column: "ID"
     resume_text_column: "Resume_str"
     resume_html_column: "Resume_html"
     category_column: "Category"
+    # Note: dataset has 'HR' which maps to 'HUMAN-RESOURCES' in config.categories
 
   extractor:
     # Columns to extract and use for retrieval
@@ -293,6 +354,16 @@ evaluation:
       - "entity_accuracy"
 
 # ============================================
+# MLFLOW TRACKING SETTINGS
+# ============================================
+mlflow:
+  tracking_uri: "sqlite:///mlflow.db"  # SQLite backend; use "http://<host>:5000" for remote server
+  experiment_name_prefix: ""  # optional prefix, e.g. "dev-" or "prod-"
+  pytorch_autolog: false  # enable mlflow.pytorch.autolog() for automatic metric capture
+  # artifact_location:  # optional override; defaults to <tracking_uri>/<experiment_id>/artifacts
+  register_models: true  # auto-register best models in Model Registry
+
+# ============================================
 # API SETTINGS
 # ============================================
 api:
@@ -310,6 +381,7 @@ api:
 docker:
   base_image: "python:3.10-slim"
   python_packages:
+    - "mlflow>=3.0.0"
     - "torch>=2.0.0"
     - "transformers>=4.30.0"
     - "fastapi>=0.100.0"

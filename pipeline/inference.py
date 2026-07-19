@@ -5,9 +5,9 @@ Chains Model 3 (Extraction) → Model 2 (Category) → Model 1 (Scoring)
 
 import torch
 import logging
+import warnings
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
 import time
 from pathlib import Path
 
@@ -48,7 +48,10 @@ class CandidateResult:
     category_confidence: float
     skill_overlap: float
     keyword_overlap: float
-    processing_time: float
+    ner_skills: List[str] = None       # skills from SkillNer / NER extraction
+    experience_years: float = 0        # extracted years of experience
+    education: List = None             # extracted education entries
+    processing_time: float = 0
     metadata: Dict = None
 
 
@@ -94,6 +97,7 @@ class TriadRankPipeline:
             self.device = device
         self.top_k = top_k
         self.category_penalty = category_penalty
+        self.category_similarity = config.get('penalties', {}).get('category_similarity', {})
         self.verbose = verbose
 
         tier3_cfg = (config.get('inference', {}) or {}).get('tier3', {}) or {}
@@ -101,15 +105,57 @@ class TriadRankPipeline:
         self.tier3_keyword_weight = float(tier3_cfg.get('keyword_weight', 0.4))
         self.tier3_skill_weight = float(tier3_cfg.get('skill_weight', 0.6))
         self.tier3_enable_custom_rules = bool(tier3_cfg.get('enable_custom_rules', True))
+
+        # Final-score blending. Cross-encoder alone collapses to ~0.46 for every
+        # pair (training data has no negatives), so raw_score * penalty_factor
+        # yields no real ranking signal. The weighted mode blends content overlap
+        # (which actually depends on resume vs JD text) with the category gate.
+        scoring_cfg = (config.get('inference', {}) or {}).get('scoring', {}) or {}
+        self.scoring_mode = scoring_cfg.get('mode', 'weighted')
+        _w = scoring_cfg.get('weights', {}) or {}
+        self.w_content = float(_w.get('content_overlap', 0.50))
+        self.w_category = float(_w.get('category', 0.30))
+        self.w_cross = float(_w.get('cross_encoder', 0.20))
         
-        # Get category mappings
+        # Get category mappings from config (fallback; may be overridden by checkpoint)
         self.id_to_name = config['categories']['id_to_name']
         self.name_to_id = config['categories']['name_to_id']
-        
+
+        # Cache tokenizers once per pipeline lifetime (I1)
+        from transformers import AutoTokenizer
+        self._cat_tokenizer = AutoTokenizer.from_pretrained(
+            config['models']['category_encoder']['pretrained_model'],
+            token=False,
+        )
+        self._cross_tokenizer = AutoTokenizer.from_pretrained(
+            config['models']['cross_encoder']['pretrained_model'],
+            token=False,
+        )
+
         # Initialize models
         self._init_models(model1_path, model2_path, model3_spacy_model)
-        
+
         logger.info(f"Pipeline initialized on device: {device}")
+
+    def _get_category_penalty(self, pred_category: str, target_category: str) -> float:
+        """Get penalty factor based on category similarity.
+
+        Args:
+            pred_category: Predicted category name
+            target_category: Target job category name
+
+        Returns:
+            Penalty factor (1.0 = no penalty, lower = harsher penalty)
+        """
+        if pred_category == target_category:
+            return 1.0
+        # Check similarity matrix (defined once per pair in config)
+        pair = f"{pred_category},{target_category}"
+        rev = f"{target_category},{pred_category}"
+        similarity = self.category_similarity.get(pair) or self.category_similarity.get(rev)
+        if similarity is not None:
+            return similarity
+        return self.category_penalty
     
     def _init_models(
         self,
@@ -126,9 +172,11 @@ class TriadRankPipeline:
             spacy_model_to_load = resolved_spacy_model
         else:
             spacy_model_to_load = spacy_model
+        skill_mode = config.get("inference", {}).get("tier3", {}).get("skill_extractor_mode", "regex")
         self.extractor = ResumeExtractor(
             spacy_model=spacy_model_to_load,
-            enable_custom_rules=self.tier3_enable_custom_rules
+            enable_custom_rules=self.tier3_enable_custom_rules,
+            skill_extractor_mode=skill_mode
         )
         self.miner = HardNegativeMiner()
         logger.info("Model 3 initialized successfully")
@@ -138,7 +186,21 @@ class TriadRankPipeline:
         resolved_model2_path = _resolve_artifact_path(model2_path)
         if resolved_model2_path and Path(resolved_model2_path).exists():
             self.model2 = CategoryEncoder.load(resolved_model2_path, device=self.device)
+            # B3: prefer the checkpoint's own label space over config['categories']
+            # (which may have a different class count, e.g. 24 vs 25).
+            if getattr(self.model2, 'id_to_name', None) is not None:
+                self.id_to_name = self.model2.id_to_name
+                self.name_to_id = self.model2.category_to_idx
+                logger.info(
+                    f"B3: Using checkpoint label mapping ({len(self.id_to_name)} classes)"
+                )
         else:
+            msg = (
+                "Model 2 checkpoint not found at '%s' — falling back to random "
+                "UNTRAINED weights. All category predictions will be noise."
+            )
+            logger.warning(msg, resolved_model2_path)
+            warnings.warn(msg % resolved_model2_path, stacklevel=2)
             self.model2 = CategoryEncoder.from_config(
                 config['models']['category_encoder']
             )
@@ -152,6 +214,12 @@ class TriadRankPipeline:
         if resolved_model1_path and Path(resolved_model1_path).exists():
             self.model1 = MultiHeadCrossEncoder.load(resolved_model1_path, device=self.device)
         else:
+            msg = (
+                "Model 1 checkpoint not found at '%s' — falling back to random "
+                "UNTRAINED weights. All scoring outputs will be noise."
+            )
+            logger.warning(msg, resolved_model1_path)
+            warnings.warn(msg % resolved_model1_path, stacklevel=2)
             self.model1 = MultiHeadCrossEncoder.from_config(
                 config['models']['cross_encoder']
             )
@@ -283,32 +351,32 @@ class TriadRankPipeline:
         for candidate in candidates:
             resume_text = candidate.get('text', '')
             candidate_id = candidate.get('id', 'unknown')
-            
-            # Extract entities from resume
-            extraction = self.extractor.extract(resume_text)
-            
-            # Get skills list
-            resume_skills = []
-            for skills in extraction['skills'].values():
-                resume_skills.extend(skills)
-            
-            # Compute keyword overlap
+
+            # Keyword overlap (cheap, always needed)
             keyword_overlap = self.miner.compute_keyword_overlap(
                 resume_text, job_description
             )['jaccard']
-            
-            # Compute skill overlap
+
+            # I3: skip the expensive spaCy extract() when skill overlap is disabled
             if self.tier3_use_skill_overlap:
+                extraction = self.extractor.extract(resume_text)
+                # Use same logic as extract_skills_list(): prefer ner_skills, fall back to regex
+                if extraction.get("ner_skills"):
+                    resume_skills = list(extraction["ner_skills"])
+                else:
+                    resume_skills = []
+                    for skills in extraction['skills'].values():
+                        resume_skills.extend(skills)
                 skill_overlap = self.extractor.get_skill_overlap(
                     resume_skills, job_skills
                 )
             else:
-                skill_overlap = 0.0
+                extraction = {}
                 resume_skills = []
-            
-            # Combined score for ranking
+                skill_overlap = 0.0
+
             combined_score = keyword_weight * keyword_overlap + skill_weight * skill_overlap
-            
+
             results.append({
                 'id': candidate_id,
                 'text': resume_text,
@@ -344,10 +412,7 @@ class TriadRankPipeline:
 
         results = []
 
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            config['models']['category_encoder']['pretrained_model']
-        )
+        tokenizer = self._cat_tokenizer   # I1: cached once in __init__
         max_seq_length = config['models']['category_encoder'].get('max_seq_length', 256)
 
         resume_texts = [clean_resume_text(c.get('text', '')) for c in candidates]
@@ -371,7 +436,11 @@ class TriadRankPipeline:
             pred_category_name = self.id_to_name[pred_category_id]
 
             is_match = pred_category_id == target_category_id
-            penalty_factor = 1.0 if is_match else self.category_penalty
+            if is_match:
+                penalty_factor = 1.0
+            else:
+                target_name = self.id_to_name.get(target_category_id, "")
+                penalty_factor = self._get_category_penalty(pred_category_name, target_name)
 
             probs = predictions['probabilities'][idx]
             candidate['category'] = {
@@ -428,7 +497,8 @@ class TriadRankPipeline:
                         resumes=resume_texts[start_idx:start_idx + bs],
                         job_description=job_description,
                         tokenizer_name=config['models']['cross_encoder']['pretrained_model'],
-                        max_seq_length=max_seq_length
+                        max_seq_length=max_seq_length,
+                        tokenizer=self._cross_tokenizer  # I1: cached once in __init__
                     )
 
                     input_ids = batch['input_ids'].to(self.device)
@@ -446,7 +516,20 @@ class TriadRankPipeline:
                         probs = predictions['probabilities'][local_idx].cpu().numpy()
 
                         penalty_factor = candidate['category']['penalty_factor']
-                        final_score = raw_score * penalty_factor
+                        # Weighted blend uses the content-overlap signal from Tier 3
+                        # (skill + keyword Jaccard), which actually varies with the
+                        # resume-vs-JD text — unlike raw_score, which the cross-encoder
+                        # collapses to ~0.46 for everything. Set scoring.mode="legacy"
+                        # in config to restore raw_score * penalty_factor.
+                        if self.scoring_mode == 'legacy':
+                            final_score = raw_score * penalty_factor
+                        else:
+                            content = candidate.get('combined_score', 0.0)
+                            final_score = (
+                                self.w_content * content
+                                + self.w_category * penalty_factor
+                                + self.w_cross * raw_score
+                            )
 
                         candidate['scoring'] = {
                             'raw_score': raw_score,
@@ -497,7 +580,8 @@ class TriadRankPipeline:
         for candidate in candidates:
             scoring = candidate['scoring']
             category = candidate['category']
-            
+            extraction = candidate.get('extraction', {})
+
             result = CandidateResult(
                 candidate_id=candidate['id'],
                 final_score=scoring['final_score'],
@@ -509,10 +593,16 @@ class TriadRankPipeline:
                 category_confidence=category['confidence'],
                 skill_overlap=candidate.get('skill_overlap', 0),
                 keyword_overlap=candidate.get('keyword_overlap', 0),
+                # Unified skills: prefer ner_skills from extraction, fall back to regex
+                ner_skills=(extraction.get('ner_skills')
+                           if extraction.get('ner_skills')
+                           else candidate.get('skills', [])),
+                experience_years=extraction.get('experience_years', 0) or 0,
+                education=extraction.get('education', []) or [],
                 processing_time=0,
                 metadata={
-                    'extracted_skills': candidate.get('skills', []),
-                    'penalty_factor': category['penalty_factor']
+                    'penalty_factor': category['penalty_factor'],
+                    'experience_years': extraction.get('experience_years', 0),
                 }
             )
             
@@ -544,120 +634,3 @@ class TriadRankPipeline:
         results = self.rank_candidates(job_description, job_category, candidates)
         
         return results[0]
-
-
-class BatchProcessor:
-    """Batch processing utilities for large resume volumes."""
-    
-    def __init__(
-        self,
-        pipeline: TriadRankPipeline,
-        batch_size: int = 100,
-        max_workers: int = 4
-    ):
-        """
-        Initialize batch processor.
-        
-        Args:
-            pipeline: TriadRankPipeline instance
-            batch_size: Number of candidates per batch
-            max_workers: Maximum parallel workers
-        """
-        self.pipeline = pipeline
-        self.batch_size = batch_size
-        self.max_workers = max_workers
-    
-    def process_all(
-        self,
-        job_description: str,
-        job_category: str,
-        all_candidates: List[Dict[str, Any]]
-    ) -> List[CandidateResult]:
-        """
-        Process all candidates in batches.
-        
-        Args:
-            job_description: Job description text
-            job_category: Target job category
-            all_candidates: All candidates to process
-            
-        Returns:
-            All ranked results
-        """
-        all_results = []
-        
-        # Process in batches
-        for i in range(0, len(all_candidates), self.batch_size):
-            batch = all_candidates[i:i + self.batch_size]
-            
-            logger.info(f"Processing batch {i // self.batch_size + 1}/"
-                       f"{(len(all_candidates) - 1) // self.batch_size + 1}")
-            
-            batch_results = self.pipeline.rank_candidates(
-                job_description, job_category, batch
-            )
-            
-            all_results.extend(batch_results)
-        
-        # Sort all results together
-        all_results.sort(key=lambda x: x.final_score, reverse=True)
-        
-        return all_results
-    
-    def process_parallel(
-        self,
-        jobs: List[Dict]
-    ) -> Dict[str, List[CandidateResult]]:
-        """
-        Process multiple jobs in parallel.
-        
-        Args:
-            jobs: List of job dictionaries with 'description', 'category', 'candidates'
-            
-        Returns:
-            Dictionary mapping job IDs to ranked results
-        """
-        results = {}
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {}
-            
-            for job in jobs:
-                job_id = job.get('id', f'job_{len(futures)}')
-                future = executor.submit(
-                    self.pipeline.rank_candidates,
-                    job['description'],
-                    job['category'],
-                    job['candidates']
-                )
-                futures[job_id] = future
-            
-            for job_id, future in futures.items():
-                results[job_id] = future.result()
-        
-        return results
-
-
-def create_pipeline(
-    model1_path: str = None,
-    model2_path: str = None,
-    model3_path: str = None,
-    **kwargs
-) -> TriadRankPipeline:
-    """
-    Factory function to create a pipeline instance.
-    
-    Args:
-        model1_path: Path to cross-encoder weights
-        model2_path: Path to category encoder weights
-        model3_path: Path to extractor model (not used for spaCy)
-        **kwargs: Additional pipeline arguments
-        
-    Returns:
-        Configured TriadRankPipeline instance
-    """
-    return TriadRankPipeline(
-        model1_path=model1_path,
-        model2_path=model2_path,
-        **kwargs
-    )

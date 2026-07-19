@@ -2,49 +2,139 @@
 Model 3: Entity Extractor for Resume Parsing
 Extracts skills, experience, education, and other entities from resumes.
 Also handles hard negative mining for training.
+
+Skill extraction uses a 31K+ Aho-Corasick trie built from SkillNer
+SKILL_DB + curated aliases.  Regex / SkillNer / HF NER remain as
+fallbacks for backwards compatibility.
 """
 
 import torch
 import torch.nn as nn
 import spacy
 import re
+import logging
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
+from pathlib import Path
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from config import config
+from models.skill_trie import SkillTrie
+
+logger = logging.getLogger(__name__)
 
 
 class ResumeExtractor:
     """
     Entity extraction module for parsing resumes.
     Uses spaCy NER with custom rules for resume-specific entities.
+    Optionally uses SkillNer (EMSI skills database) or a HuggingFace
+    token-classification model for skill extraction.
     """
-    
+
     def __init__(
         self,
         spacy_model: str = "en_core_web_sm",
-        enable_custom_rules: bool = True
+        enable_custom_rules: bool = True,
+        skill_extractor_mode: str = "trie",
+        skill_ner_model: str = None,
+        skill_db_path: Optional[str] = None,
     ):
         """
         Initialize the extractor with spaCy model.
-        
+
         Args:
             spacy_model: spaCy model name to load
             enable_custom_rules: Whether to enable custom extraction rules
+            skill_extractor_mode: "trie" | "regex" | "skillner" | "hf_ner".
+                "trie" = Aho-Corasick trie backed by 31K SkillNer DB + curated
+                         aliases (default).  Instant, scalable, no spaCy overhead.
+                "regex" = pattern-based (legacy).
+                "skillner" = EMSI skills database via PhraseMatcher (31K skills).
+                "hf_ner" = HuggingFace token-classification model.
+            skill_ner_model: HuggingFace model name for token-classification
+                            (used when mode="hf_ner").
+            skill_db_path: Path to skill_db.json for "trie" mode.
+                           Defaults to <project_root>/data/skill_db.json.
         """
         self.nlp = spacy.load(spacy_model)
         self.enable_custom_rules = enable_custom_rules
-        
-        # Custom skill patterns
+        self.skill_extractor_mode = skill_extractor_mode
+        self.skill_ner_model = skill_ner_model
+
+        # Custom skill patterns (fallback when regex mode)
         self.skill_patterns = self._build_skill_patterns()
-        
+
         # Company name patterns
         self.company_patterns = self._build_company_patterns()
-        
+
         # Degree patterns
         self.degree_patterns = self._build_degree_patterns()
+
+        # SkillNer extractor (lazy-loaded)
+        self._skillner_extractor = None
+
+        # HuggingFace NER pipeline (lazy-loaded)
+        self._ner_pipeline = None
+
+        # Aho-Corasick trie (default mode) — 31K+ skills, instant match
+        self._skill_trie = None
+        if skill_extractor_mode == "trie":
+            if skill_db_path is None:
+                # Default path: <project_root>/data/skill_db.json
+                _root = Path(__file__).resolve().parent.parent
+                skill_db_path = str(_root / "data" / "skill_db.json")
+            if Path(skill_db_path).exists():
+                self._skill_trie = SkillTrie(skill_db_path)
+                logger.info(
+                    "SkillTrie loaded: %d skills, %d aliases",
+                    self._skill_trie.skill_count,
+                    len(self._skill_trie._canonical),
+                )
+            else:
+                logger.warning(
+                    "Skill database not found at '%s' — "
+                    "run scripts/build_skill_db.py first. "
+                    "Falling back to regex mode.",
+                    skill_db_path,
+                )
+                self.skill_extractor_mode = "regex"
+
+    def _load_skillner(self):
+        """Lazy-load the SkillNer extractor (EMSI skills database)."""
+        if self._skillner_extractor is not None:
+            return
+        try:
+            from spacy.matcher import PhraseMatcher
+            from skillNer.general_params import SKILL_DB
+            from skillNer.skill_extractor_class import SkillExtractor as _SE
+
+            self._skillner_extractor = _SE(self.nlp, SKILL_DB, PhraseMatcher)
+            logger.info("SkillNer loaded (%d skills in DB)", len(SKILL_DB))
+        except Exception:
+            logger.warning(
+                "SkillNer not available, falling back to regex patterns. "
+                "Install: pip install skillNer ipython",
+                exc_info=True,
+            )
+            self.skill_extractor_mode = "regex"
+
+    def _load_hf_ner(self):
+        """Lazy-load the HuggingFace token-classification pipeline."""
+        if self._ner_pipeline is not None:
+            return
+        if not self.skill_ner_model:
+            return
+        from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
+        tokenizer = AutoTokenizer.from_pretrained(self.skill_ner_model)
+        model = AutoModelForTokenClassification.from_pretrained(self.skill_ner_model)
+        self._ner_pipeline = pipeline(
+            "token-classification",
+            model=model,
+            tokenizer=tokenizer,
+            aggregation_strategy="simple",
+        )
     
     def _build_skill_patterns(self) -> Dict:
         """Build regex patterns for skill extraction."""
@@ -95,15 +185,15 @@ class ResumeExtractor:
     def extract(self, text: str) -> Dict[str, Any]:
         """
         Extract all entities from resume text.
-        
+
         Args:
             text: Raw resume text
-            
+
         Returns:
             Dictionary containing all extracted entities
         """
         doc = self.nlp(text)
-        
+
         # Initialize result dictionary
         result = {
             'skills': {
@@ -114,12 +204,14 @@ class ResumeExtractor:
                 'soft_skills': [],
                 'certifications': []
             },
+            'ner_skills': [],  # flat list from SkillNer/HF NER when available
             'experience': [],
+            'experience_years': 0,  # extracted from explicit mentions and date ranges
             'education': [],
             'personal_info': {},
             'raw_entities': []
         }
-        
+
         # Extract using spaCy NER
         for ent in doc.ents:
             result['raw_entities'].append({
@@ -128,18 +220,91 @@ class ResumeExtractor:
                 'start': ent.start_char,
                 'end': ent.end_char
             })
-        
-        # Extract using custom patterns
-        if self.enable_custom_rules:
+
+        # Extract skills — dispatch by configured mode
+        if self.skill_extractor_mode == "trie" and self._skill_trie is not None:
+            self._extract_skills_trie(text, result)
+        elif self.skill_extractor_mode == "skillner":
+            if self._skillner_extractor is None:
+                self._load_skillner()
+            if self._skillner_extractor is not None:
+                self._extract_skills_skillner(text, result)
+            elif self.enable_custom_rules:
+                self._extract_skills(text, result)
+        elif self.skill_extractor_mode == "hf_ner":
+            self._load_hf_ner()
+            self._extract_skills_ner(text, result)
+        elif self.enable_custom_rules:
             self._extract_skills(text, result)
+
+        # Extract education and experience (always keep these)
+        if self.enable_custom_rules:
             self._extract_education(text, result)
             self._extract_experience_patterns(text, result)
-        
+
         # Clean and deduplicate
         result = self._clean_results(result)
-        
+
         return result
     
+    def _extract_skills_trie(self, text: str, result: Dict):
+        """Extract skills using the Aho-Corasick trie (31K+ skills)."""
+        matches = self._skill_trie.match_categorized(text)
+        for cat, skills in matches.items():
+            # Map trie categories to result dict keys
+            if cat in ("programming_language",):
+                result["skills"]["programming_languages"].extend(skills)
+            elif cat in ("framework",):
+                result["skills"]["frameworks"].extend(skills)
+            elif cat in ("database",):
+                result["skills"]["databases"].extend(skills)
+            elif cat in ("tool", "devops"):
+                result["skills"]["tools"].extend(skills)
+            elif cat in ("soft_skill",):
+                result["skills"]["soft_skills"].extend(skills)
+            elif cat in ("certification",):
+                result["skills"]["certifications"].extend(skills)
+            else:
+                result["ner_skills"].extend(skills)
+
+    def _extract_skills_skillner(self, text: str, result: Dict):
+        """Extract skills using SkillNer's EMSI skills database."""
+        if self._skillner_extractor is None:
+            return
+        try:
+            annotations = self._skillner_extractor.annotate(text)
+            results = annotations.get("results", {})
+            seen = set()
+            for bucket in ("full_matches", "ngram_scored", "abv_matches"):
+                for m in results.get(bucket, []):
+                    skill = m.get("doc_node_value", "").strip()
+                    if skill and skill.lower() not in seen:
+                        seen.add(skill.lower())
+                        result["ner_skills"].append(skill)
+        except Exception:
+            logger.warning("SkillNer extraction failed, falling back to regex", exc_info=True)
+            self._extract_skills(text, result)
+
+    def _extract_skills_ner(self, text: str, result: Dict):
+        """Extract skills using HuggingFace token-classification NER model."""
+        if self._ner_pipeline is None:
+            return
+        try:
+            predictions = self._ner_pipeline(text)
+            seen = set()
+            for pred in predictions:
+                skill = pred.get("word", "").strip()
+                # The aggregation_strategy="simple" handles B/I merging,
+                # but tokens may include ## subword fragments (WordPiece).
+                # Clean those up.
+                skill = skill.replace(" ##", "").replace("##", "")
+                if skill and skill.lower() not in seen:
+                    seen.add(skill.lower())
+                    result["ner_skills"].append(skill)
+        except Exception:
+            logger.warning("NER skill extraction failed, falling back to regex", exc_info=True)
+            self._extract_skills(text, result)
+
     def _extract_skills(self, text: str, result: Dict):
         """Extract skills using regex patterns."""
         text_lower = text.lower()
@@ -198,13 +363,13 @@ class ResumeExtractor:
                     break
     
     def _extract_experience_patterns(self, text: str, result: Dict):
-        """Extract work experience patterns."""
-        # Find job titles
+        """Extract work experience patterns — titles, years, date ranges."""
+        # Job title patterns
         job_title_patterns = [
-            r'\b(senior|junior|lead|principal|staff|chief|head|director|manager|engineer|developer|analyst|designer|consultant|specialist)\s+[A-Za-z\s]+',
-            r'\b(cto|ceo|cfo|vp|vp of|head of)\b'
+            r'\b(senior|junior|lead|principal|staff|chief|head|director|manager|engineer|developer|analyst|designer|consultant|specialist|architect|scientist|coordinator|associate|intern)\s+[A-Za-z\s]+',
+            r'\b(cto|ceo|cfo|coo|vp|vp of|head of|director of|manager of)\b'
         ]
-        
+
         for pattern in job_title_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
@@ -213,13 +378,90 @@ class ResumeExtractor:
                         'job_title': match.strip(),
                         'raw': match.strip()
                     })
+
+        # Years of experience — explicit mention patterns
+        years_total = 0.0
+        years_patterns = [
+            r'(\d+)\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience',
+            r'experience\s+(?:of\s+)?(\d+)\+?\s*(?:years?|yrs?)',
+            r'(?:over|>)\s*(\d+)\+?\s*(?:years?|yrs?)',
+            r'(\d+)\+?\s*(?:years?|yrs?)\s+(?:in|with|of)',
+        ]
+        for pattern in years_patterns:
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                val = float(m.group(1))
+                years_total = max(years_total, val)
+
+        # Date range patterns — compute years from work history spans.
+        # Use two strategies: month-inclusive (preferred) then simple year-only.
+        # Track matched positions to avoid double-counting.
+        date_ranges_found = []
+        matched_spans = []  # (start, end) char positions already counted
+
+        def _span_overlaps(s, e, existing):
+            return any(not (e <= es or s >= ee) for es, ee in existing)
+
+        # Strategy 1: "Jun 2019 – Present" or "June 2019 - Present"
+        month_range_pat = (
+            r'(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*'
+            r'(?:\s+\d{4})?)\s*[-–—to]+\s*'
+            r'(present|current|now|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(?:\s+\d{4})?\b)'
+        )
+        for m in re.finditer(month_range_pat, text, re.IGNORECASE):
+            start_str, end_str = m.group(1), m.group(2)
+            if _span_overlaps(m.start(), m.end(), matched_spans):
+                continue
+            is_present = end_str.lower() in ('present', 'current', 'now')
+            start_parts = re.findall(r'\b(\d{4})\b', start_str)
+            end_parts = re.findall(r'\b(\d{4})\b', end_str) if not is_present else []
+            if start_parts:
+                start_year = int(start_parts[0])
+                end_year = 2026 if is_present else (int(end_parts[0]) if end_parts else start_year + 1)
+                date_ranges_found.append(max(1, end_year - start_year))
+                matched_spans.append((m.start(), m.end()))
+
+        # Strategy 2: "2018 - 2023" (only if not already counted)
+        for m in re.finditer(r'(\b\d{4})\s*[-–—to]+\s*(\d{4}|present|current|now)', text, re.IGNORECASE):
+            if _span_overlaps(m.start(), m.end(), matched_spans):
+                continue
+            start_str, end_str = m.group(1), m.group(2)
+            is_present = end_str.lower() in ('present', 'current', 'now')
+            start_year = int(start_str)
+            end_year = 2026 if is_present else int(end_str)
+            date_ranges_found.append(max(1, end_year - start_year))
+            matched_spans.append((m.start(), m.end()))
+
+        if date_ranges_found:
+            years_total = max(years_total, sum(date_ranges_found))
+
+        # Also try to infer from number of positions listed
+        if years_total == 0:
+            position_markers = len(re.findall(
+                r'\b(?:experience|employment|work history|professional)\b',
+                text, re.IGNORECASE
+            ))
+            if position_markers >= 2:
+                years_total = max(1.0, position_markers * 1.5)
+
+        if years_total > 0:
+            result['experience_years'] = years_total
     
     def _clean_results(self, result: Dict) -> Dict:
         """Clean and deduplicate extracted results."""
         for category in result['skills']:
             unique_skills = list(set(result['skills'][category]))
             result['skills'][category] = sorted(unique_skills)
-        
+
+        # Deduplicate NER skills
+        seen = set()
+        unique_ner = []
+        for s in result.get("ner_skills", []):
+            key = s.lower().strip()
+            if key and key not in seen:
+                seen.add(key)
+                unique_ner.append(s)
+        result["ner_skills"] = unique_ner
+
         # Remove duplicate education entries
         seen = set()
         unique_education = []
@@ -229,12 +471,16 @@ class ResumeExtractor:
                 seen.add(key)
                 unique_education.append(edu)
         result['education'] = unique_education
-        
+
         return result
-    
+
     def extract_skills_list(self, text: str) -> List[str]:
-        """Extract all skills as a flat list."""
+        """Extract all skills as a flat list.
+        Prefers SkillNer / NER results when available, falls back to regex.
+        """
         result = self.extract(text)
+        if result.get("ner_skills"):
+            return list(result["ner_skills"])
         all_skills = []
         for category, skills in result['skills'].items():
             all_skills.extend(skills)
@@ -294,66 +540,7 @@ class HardNegativeMiner:
             stop_words='english',
             ngram_range=(1, 2)
         )
-    
-    def mine_hard_negatives(
-        self,
-        positives: List[Dict],
-        candidates: List[Dict]
-    ) -> List[Dict]:
-        """
-        Mine hard negative examples from candidate pool.
-        
-        Args:
-            positives: List of positive (good match) examples
-            candidates: List of candidate resume-job pairs
-            
-        Returns:
-            List of hard negative examples
-        """
-        # Compute TF-IDF vectors for all texts
-        all_texts = [p['resume_text'] for p in positives] + \
-                   [c['resume_text'] for c in candidates]
-        
-        tfidf_matrix = self.vectorizer.fit_transform(all_texts)
-        
-        positives_vectors = tfidf_matrix[:len(positives)]
-        candidates_vectors = tfidf_matrix[len(positives):]
-        
-        # Compute similarities
-        similarities = cosine_similarity(positives_vectors, candidates_vectors)
-        
-        hard_negatives = []
-        
-        for pos_idx, pos in enumerate(positives):
-            # Get similarities for this positive
-            pos_similarities = similarities[pos_idx]
-            
-            # Find top similar candidates (but not too similar)
-            sorted_indices = np.argsort(pos_similarities)[::-1]
-            
-            negatives_mined = 0
-            for cand_idx in sorted_indices:
-                if negatives_mined >= self.max_negatives_per_positive:
-                    break
-                
-                sim_score = pos_similarities[cand_idx]
-                candidate = candidates[cand_idx]
-                
-                # Check if it's a hard negative (high similarity but negative label)
-                if (sim_score >= self.similarity_threshold and 
-                    candidate.get('label') == 'bad_fit'):
-                    
-                    hard_negatives.append({
-                        'resume_text': candidate['resume_text'],
-                        'job_description': pos['job_description'],
-                        'similarity': float(sim_score),
-                        'label': 'hard_negative',
-                        'reason': 'high_similarity_bad_label'
-                    })
-                    negatives_mined += 1
-        
-        return hard_negatives
-    
+
     def compute_keyword_overlap(
         self,
         text1: str,
@@ -396,150 +583,3 @@ class HardNegativeMiner:
             'f1': f1,
             'common_keywords': list(intersection)
         }
-    
-    def select_top_k(
-        self,
-        candidates: List[Dict],
-        job_description: str,
-        k: int,
-        use_extractor: ResumeExtractor = None
-    ) -> List[Dict]:
-        """
-        Select top K candidates based on skill overlap.
-        
-        Args:
-            candidates: List of candidate resumes
-            job_description: Job description text
-            k: Number of candidates to select
-            use_extractor: Optional extractor for skill-based filtering
-            
-        Returns:
-            Top K candidates sorted by relevance
-        """
-        # Compute basic keyword overlap
-        for candidate in candidates:
-            overlap = self.compute_keyword_overlap(
-                candidate['resume_text'],
-                job_description
-            )
-            candidate['keyword_overlap'] = overlap['jaccard']
-            candidate['keyword_f1'] = overlap['f1']
-            candidate['common_keywords'] = overlap['common_keywords']
-        
-        # If extractor provided, also compute skill overlap
-        if use_extractor:
-            job_skills = use_extractor.extract_skills_list(job_description)
-            
-            for candidate in candidates:
-                resume_skills = use_extractor.extract_skills_list(
-                    candidate['resume_text']
-                )
-                skill_overlap = use_extractor.get_skill_overlap(
-                    resume_skills, job_skills
-                )
-                candidate['skill_overlap'] = skill_overlap
-        
-        # Sort by combined score
-        for candidate in candidates:
-            if 'skill_overlap' in candidate:
-                # Combine keyword and skill overlap
-                candidate['combined_score'] = (
-                    0.4 * candidate['keyword_overlap'] +
-                    0.6 * candidate['skill_overlap']
-                )
-            else:
-                candidate['combined_score'] = candidate['keyword_overlap']
-        
-        # Sort and select top K
-        sorted_candidates = sorted(
-            candidates,
-            key=lambda x: x['combined_score'],
-            reverse=True
-        )
-        
-        return sorted_candidates[:k]
-
-
-class ExtractionTrainer:
-    """Training utilities for entity extraction model."""
-    
-    def __init__(
-        self,
-        model: nn.Module,
-        learning_rate: float = 1e-4,
-        device: str = 'cuda'
-    ):
-        self.model = model
-        self.device = device
-        
-        self.optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=learning_rate
-        )
-    
-    def train_epoch(self, dataloader) -> Dict[str, float]:
-        """Train for one epoch."""
-        self.model.train()
-        total_loss = 0
-        num_batches = 0
-        
-        for batch in dataloader:
-            # Move to device
-            # (Implementation depends on specific extraction model)
-            loss = self._compute_loss(batch)
-            
-            # Backward pass
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            
-            total_loss += loss.item()
-            num_batches += 1
-        
-        return {'avg_loss': total_loss / num_batches}
-    
-    def _compute_loss(self, batch) -> torch.Tensor:
-        """Compute loss for extraction model."""
-        # Placeholder - implementation depends on model architecture
-        return torch.tensor(0.0, device=self.device)
-    
-    @torch.no_grad()
-    def evaluate(self, dataloader) -> Dict[str, float]:
-        """Evaluate extraction model."""
-        self.model.eval()
-        
-        all_predictions = []
-        all_targets = []
-        
-        for batch in dataloader:
-            # Get predictions
-            predictions = self._get_predictions(batch)
-            all_predictions.extend(predictions)
-            all_targets.extend(batch['labels'])
-        
-        # Calculate precision, recall, F1
-        from sklearn.metrics import precision_recall_fscore_support
-        
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            all_targets, all_predictions, average='weighted'
-        )
-        
-        return {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1
-        }
-    
-    def _get_predictions(self, batch) -> List:
-        """Get predictions from model."""
-        # Placeholder - implementation depends on model architecture
-        return []
-    
-    def save_checkpoint(self, path: str, epoch: int, metrics: Dict):
-        """Save training checkpoint."""
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'metrics': metrics
-        }, path)

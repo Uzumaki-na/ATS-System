@@ -5,6 +5,7 @@ Lightweight transformer for semantic category validation.
 
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from transformers import AutoModel
 from typing import Dict, List, Optional
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
@@ -137,6 +138,15 @@ class CategoryEncoder(nn.Module):
             'logits': outputs['logits']
         }
     
+    def set_class_weights(self, weights: torch.Tensor) -> None:
+        """Store class weights for weighted cross-entropy loss.
+
+        Args:
+            weights: Float tensor of shape (num_classes,) with inverse-frequency
+                     or custom per-class weights.
+        """
+        self.register_buffer('_class_weights', weights)
+
     def get_loss(
         self,
         input_ids: torch.Tensor,
@@ -144,18 +154,19 @@ class CategoryEncoder(nn.Module):
         target_class: torch.Tensor
     ) -> torch.Tensor:
         """
-        Calculate cross-entropy loss.
-        
+        Calculate cross-entropy loss (optionally class-weighted).
+
         Args:
             input_ids: Token IDs
             attention_mask: Attention mask
             target_class: Target class labels
-            
+
         Returns:
             Cross-entropy loss
         """
         outputs = self.forward(input_ids, attention_mask)
-        loss_fn = nn.CrossEntropyLoss()
+        weight = getattr(self, '_class_weights', None)
+        loss_fn = nn.CrossEntropyLoss(weight=weight)
         return loss_fn(outputs['logits'], target_class)
     
     @classmethod
@@ -171,117 +182,193 @@ class CategoryEncoder(nn.Module):
             dropout=model_config.get('dropout', 0.1)
         )
     
-    def save(self, path: str):
-        """Save model weights and config."""
+    def save(self, path: str, category_to_idx: Optional[Dict[str, int]] = None):
+        """Save model weights and config.
+
+        Args:
+            path: destination .pt path
+            category_to_idx: optional {category_name: idx} mapping used during
+                training. Persisted so load() can restore the exact label space
+                the model was trained with (B3: prevents id_to_name KeyError
+                when a checkpoint has 25 classes but config has 24).
+        """
         torch.save({
             'model_state_dict': self.state_dict(),
             'pretrained_model_name': self.pretrained_model_name,
             'num_classes': self.num_classes,
-            'hidden_size': self.hidden_size
+            'hidden_size': self.hidden_size,
+            'category_to_idx': category_to_idx
         }, path)
     
     @classmethod
     def load(cls, path: str, device: str = 'cuda') -> 'CategoryEncoder':
         """Load model weights."""
         checkpoint = torch.load(path, map_location=device)
-        
+
         model = cls(
             pretrained_model_name=checkpoint['pretrained_model_name'],
             num_classes=checkpoint['num_classes'],
             hidden_size=checkpoint['hidden_size']
         )
-        
-        model.load_state_dict(checkpoint['model_state_dict'])
+
+        state = checkpoint['model_state_dict']
+        # Filter out saved training buffers not in the model's parameter keys
+        expected = set(model.state_dict().keys())
+        state = {k: v for k, v in state.items() if k in expected}
+        model.load_state_dict(state, strict=False)
         model.to(device)
         model.eval()
-        
+
+        # B3: restore the label mapping the model was trained with so the
+        # pipeline indexes predictions against the right id_to_name instead of
+        # trusting config['categories'] (which can have a different class count).
+        cat2idx = checkpoint.get('category_to_idx')
+        if isinstance(cat2idx, dict):
+            model.category_to_idx = {str(k): int(v) for k, v in cat2idx.items()}
+            model.id_to_name = {int(v): k for k, v in model.category_to_idx.items()}
+        else:
+            model.category_to_idx = None
+            model.id_to_name = None
+
         return model
 
 
 class CategoryEncoderTrainer:
     """Training utilities for Category Encoder."""
-    
+
     def __init__(
         self,
         model: CategoryEncoder,
         learning_rate: float = 3e-5,
         weight_decay: float = 0.01,
         warmup_steps: int = 200,
-        device: str = 'cuda'
+        device: str = 'cuda',
+        use_amp: bool = False,
+        gradient_accumulation_steps: int = 1,
+        total_training_steps: int | None = None,
     ):
         self.model = model
         self.device = device
-        
+        self.use_amp = use_amp and device.type == 'cuda'
+        self.gradient_accumulation_steps = max(1, gradient_accumulation_steps)
+
         # Optimizer
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=learning_rate,
-            weight_decay=weight_decay
+            weight_decay=weight_decay,
         )
-        
-        # Learning rate scheduler
+
+        # Learning rate scheduler: warmup then cosine decay to 1e-6
         if warmup_steps and warmup_steps > 0:
-            self.scheduler = torch.optim.lr_scheduler.LinearLR(
+            warmup = torch.optim.lr_scheduler.LinearLR(
                 self.optimizer,
                 start_factor=0.1,
                 end_factor=1.0,
-                total_iters=warmup_steps
+                total_iters=warmup_steps,
             )
+            if total_training_steps and total_training_steps > warmup_steps:
+                cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer,
+                    T_max=total_training_steps - warmup_steps,
+                    eta_min=1e-6,
+                )
+                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    self.optimizer,
+                    schedulers=[warmup, cosine],
+                    milestones=[warmup_steps],
+                )
+            else:
+                self.scheduler = warmup
         else:
             self.scheduler = torch.optim.lr_scheduler.ConstantLR(
-                self.optimizer,
-                factor=1.0,
-                total_iters=1
+                self.optimizer, factor=1.0, total_iters=1
             )
     
-    def train_epoch(self, dataloader) -> Dict[str, float]:
-        """Train for one epoch."""
+    def train_epoch(self, dataloader, epoch: int = 1) -> Dict[str, float]:
+        """Train for one epoch with FP16/AMP and gradient accumulation."""
         self.model.train()
         total_loss = 0
         num_batches = 0
-        
-        for batch in dataloader:
+        running_loss = 0.0
+
+        # GradScaler for FP16 — only instantiated when use_amp is True
+        scaler = torch.amp.GradScaler(enabled=self.use_amp)
+
+        pbar = tqdm(
+            dataloader,
+            desc=f"Epoch {epoch}",
+            unit="batch",
+            ncols=100,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]  {postfix}"
+        )
+
+        self.optimizer.zero_grad()
+
+        for batch_idx, batch in enumerate(pbar):
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
             target_class = batch['label'].to(self.device)
-            
-            # Forward pass
-            self.optimizer.zero_grad()
-            loss = self.model.get_loss(input_ids, attention_mask, target_class)
-            
-            # Backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
-            
-            total_loss += loss.item()
+
+            # Forward pass with optional mixed precision
+            with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
+                loss = self.model.get_loss(input_ids, attention_mask, target_class)
+                loss = loss / self.gradient_accumulation_steps
+
+            # Backward pass with optional GradScaler
+            if self.use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+
+            loss_val = loss.item() * self.gradient_accumulation_steps
+
+            # Gradient accumulation: step optimizer every N batches
+            if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                if self.use_amp:
+                    scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
+                self.optimizer.zero_grad()
+                self.scheduler.step()
+
+            total_loss += loss_val
             num_batches += 1
-            
-            # Update scheduler
-            self.scheduler.step()
-        
+            running_loss += loss_val
+
+            # Update progress bar
+            if (batch_idx + 1) % max(1, len(dataloader) // 100) == 0:
+                pbar.set_postfix(loss=f"{running_loss / max(1, len(dataloader) // 100):.4f}")
+                running_loss = 0.0
+
+        pbar.close()
+
         return {'avg_loss': total_loss / num_batches}
     
     @torch.no_grad()
     def evaluate(self, dataloader, id_to_name: Dict = None) -> Dict[str, float]:
-        """Evaluate model on validation set."""
+        """Evaluate model on validation set (supports FP16/AMP)."""
         self.model.eval()
         total_loss = 0
         all_predictions = []
         all_targets = []
         all_confidences = []
-        
+
         for batch in dataloader:
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
             target_class = batch['label'].to(self.device)
-            
-            # Get predictions
-            predictions = self.model.predict(input_ids, attention_mask)
-            
-            # Calculate loss
-            loss = self.model.get_loss(input_ids, attention_mask, target_class)
-            
+
+            with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
+                # Get predictions
+                predictions = self.model.predict(input_ids, attention_mask)
+                # Calculate loss
+                loss = self.model.get_loss(input_ids, attention_mask, target_class)
+
             total_loss += loss.item()
             all_predictions.extend(predictions['predicted_class'].cpu().tolist())
             all_targets.extend(target_class.cpu().tolist())
@@ -351,30 +438,3 @@ class CategoryEncoderTrainer:
             'scheduler_state_dict': self.scheduler.state_dict(),
             'metrics': metrics
         }, path)
-
-
-def check_category_penalty(
-    predicted_category: int,
-    target_category: int,
-    penalty_weight: float = 0.5
-) -> Dict:
-    """
-    Check if category matches and return penalty factor.
-    
-    Args:
-        predicted_category: Model predicted category ID
-        target_category: Job description category ID
-        penalty_weight: Penalty factor to apply on mismatch
-        
-    Returns:
-        Dictionary with match status and penalty factor
-    """
-    is_match = predicted_category == target_category
-    
-    return {
-        'is_match': is_match,
-        'predicted_category': predicted_category,
-        'target_category': target_category,
-        'penalty_factor': 1.0 if is_match else penalty_weight,
-        'penalty_applied': not is_match
-    }

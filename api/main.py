@@ -3,7 +3,7 @@ FastAPI Application for TriadRank ATS
 REST API for resume ranking and scoring.
 """
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -13,9 +13,13 @@ from contextlib import asynccontextmanager
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
+import tempfile
+import os
 
 from pipeline.inference import TriadRankPipeline, CandidateResult
 from config import config
+from data.pdf_processing import PDFTextExtractor, PDFProcessingConfig
 
 
 # Configure logging
@@ -143,8 +147,10 @@ class CandidateOutput(BaseModel):
     category: CategoryResult
     skill_overlap: float
     keyword_overlap: float
+    skills: List[str]
+    experience_years: float
+    education: List[str]
     processing_time: float
-    extracted_skills: List[str]
 
 
 class RankResponse(BaseModel):
@@ -288,8 +294,10 @@ async def rank_candidates(request: RankRequest):
                 ),
                 skill_overlap=round(result.skill_overlap, 4),
                 keyword_overlap=round(result.keyword_overlap, 4),
+                skills=result.ner_skills or [],
+                experience_years=result.experience_years or 0,
+                education=[e.get('raw', '') for e in (result.education or [])],
                 processing_time=round(result.processing_time, 4),
-                extracted_skills=result.metadata.get('extracted_skills', []) if result.metadata else []
             )
             output_results.append(output)
         
@@ -344,7 +352,10 @@ async def rank_single(
             "category_match": result.category_match,
             "category_predicted": result.category_predicted,
             "skill_overlap": round(result.skill_overlap, 4),
-            "keyword_overlap": round(result.keyword_overlap, 4)
+            "keyword_overlap": round(result.keyword_overlap, 4),
+            "skills": result.ner_skills or [],
+            "experience_years": result.experience_years or 0,
+            "education": [e.get('raw', '') for e in (result.education or [])]
         }
     
     except Exception as e:
@@ -353,6 +364,123 @@ async def rank_single(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+
+
+@app.post("/rank/pdf", summary="Rank Candidates from PDF Uploads")
+async def rank_pdfs(
+    job_description: str = Form(..., description="Job description text"),
+    job_category: JobCategory = Form(..., description="Target job category"),
+    files: List[UploadFile] = File(..., description="PDF resume files to rank"),
+    top_k: Optional[int] = Form(None, description="Number of top candidates to return"),
+):
+    """
+    Upload PDF resumes and rank them against a job description.
+
+    Accepts one or more PDF files, extracts text from each, then runs
+    the full 3-tier ranking pipeline. Returns scores, labels, extracted
+    skills, experience years, and education entries per candidate.
+    """
+    global pipeline
+
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized.")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No PDF files provided.")
+
+    import time
+    start_time = time.time()
+    job_id = str(uuid.uuid4())
+
+    # Extract text from each uploaded PDF
+    pdf_config = PDFProcessingConfig(cache_enabled=False)
+    extractor = PDFTextExtractor(pdf_config)
+    candidates_data = []
+    errors = []
+
+    for f in files:
+        if not f.filename or not f.filename.lower().endswith(".pdf"):
+            errors.append(f"Skipped non-PDF file: {f.filename}")
+            continue
+
+        try:
+            contents = await f.read()
+            if not contents:
+                errors.append(f"Empty file: {f.filename}")
+                continue
+
+            suffix = Path(f.filename).suffix
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
+
+            try:
+                raw_text = extractor.extract(tmp_path)
+            finally:
+                os.unlink(tmp_path)
+
+            if not raw_text or len(raw_text.strip()) < pdf_config.min_text_length:
+                errors.append(f"Low text extraction from: {f.filename}")
+                continue
+
+            from data.loaders import clean_resume_text
+            cleaned = clean_resume_text(raw_text)
+            candidates_data.append({"id": f.filename, "text": cleaned})
+        except Exception as e:
+            errors.append(f"Failed to process {f.filename}: {str(e)}")
+
+    if not candidates_data:
+        detail = "No valid PDFs could be processed."
+        if errors:
+            detail += f" Errors: {'; '.join(errors)}"
+        raise HTTPException(status_code=400, detail=detail)
+
+    try:
+        results = pipeline.rank_candidates(
+            job_description=job_description,
+            job_category=job_category.value,
+            candidates=candidates_data,
+            top_k=top_k or config['inference']['top_k'],
+        )
+
+        output_results = []
+        for rank, result in enumerate(results, 1):
+            output_results.append(CandidateOutput(
+                rank=rank,
+                candidate_id=result.candidate_id,
+                final_score=round(result.final_score, 4),
+                raw_score=round(result.raw_score, 4),
+                label=result.label,
+                label_probabilities=LabelProbability(
+                    good_fit=result.label_probabilities.get('Good Fit', 0),
+                    potential_fit=result.label_probabilities.get('Potential Fit', 0),
+                    bad_fit=result.label_probabilities.get('Bad Fit', 0),
+                ),
+                category=CategoryResult(
+                    predicted=result.category_predicted,
+                    match=result.category_match,
+                    confidence=round(result.category_confidence, 4),
+                ),
+                skill_overlap=round(result.skill_overlap, 4),
+                keyword_overlap=round(result.keyword_overlap, 4),
+                skills=result.ner_skills or [],
+                experience_years=result.experience_years or 0,
+                education=[e.get('raw', '') for e in (result.education or [])],
+                processing_time=round(result.processing_time, 4),
+            ))
+
+        processing_time = time.time() - start_time
+        return RankResponse(
+            job_id=job_id,
+            job_category=job_category.value,
+            total_candidates=len(candidates_data),
+            returned_candidates=len(results),
+            processing_time_seconds=round(processing_time, 4),
+            results=output_results,
+        )
+    except Exception as e:
+        logger.error(f"Error processing PDF ranking request: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @app.post("/extract", summary="Extract Entities from Resume")

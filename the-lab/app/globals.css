@@ -1,0 +1,452 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ─── Design Tokens ─────────────────────────────────────── */
+
+@theme inline {
+  --font-sans: 'Crimson Pro', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+  --font-heading: 'Crimson Pro', Georgia, serif;
+
+  /* Colors - Neo-brutalist palette */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Neo-brutalist shape tokens */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+
+  /* Hard shadow tokens */
+  --shadow-hard: 4px 4px 0px #111111;
+  --shadow-hard-lg: 8px 8px 0px #111111;
+  --shadow-hard-blue: 4px 4px 0px #0000FF;
+
+  /* Animation easings */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ─── Light Theme (default) ──────────────────────────────── */
+
+:root {
+  --background: #F9F9F6;
+  --foreground: #111111;
+
+  --card: #FFFFFF;
+  --card-foreground: #111111;
+  --popover: #FFFFFF;
+  --popover-foreground: #111111;
+
+  --primary: #0000FF;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EEEEEE;
+  --secondary-foreground: #111111;
+  --muted: #EEEEEE;
+  --muted-foreground: #666666;
+  --accent: #FF0033;
+  --accent-foreground: #FFFFFF;
+  --destructive: #FF0033;
+
+  --border: #111111;
+  --input: #111111;
+  --ring: #0000FF;
+
+  --chart-1: #0000FF;
+  --chart-2: #111111;
+  --chart-3: #FF0033;
+  --chart-4: #666666;
+  --chart-5: #F9F9F6;
+
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #111111;
+  --sidebar-primary: #0000FF;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EEEEEE;
+  --sidebar-accent-foreground: #111111;
+  --sidebar-border: #111111;
+  --sidebar-ring: #0000FF;
+
+  /* Hard shadows */
+  --shadow: var(--shadow-hard);
+
+  /* Terminal colors */
+  --terminal-bg: #111111;
+  --terminal-text: #00FF00;
+  --terminal-dim: #008800;
+}
+
+/* ─── Base Styles ────────────────────────────────────────── */
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Typography scale */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading font-semibold text-balance;
+  }
+
+  body {
+    font-size: 1.125rem;
+    line-height: 1.6;
+  }
+
+  /* Mono for data, code, UI labels */
+  code, pre, kbd, samp,
+  .mono,
+  [data-mono] {
+    font-family: var(--font-mono);
+  }
+
+  /* Styled selection */
+  ::selection {
+    background: #0000FF;
+    color: #FFFFFF;
+  }
+
+  /* Focus ring */
+  *:focus-visible {
+    outline: 2px solid #0000FF;
+    outline-offset: 2px;
+  }
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #EEEEEE;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #111111;
+  border: none;
+}
+
+/* ─── Reduced Motion ─────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ─── Keyframe Animations ────────────────────────────────── */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(1rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes skeleton-pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+@keyframes score-bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes data-flow {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+@keyframes tier-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(68,136,255,0.2), 0 0 20px rgba(68,136,255,0.08); }
+  50% { box-shadow: 0 0 20px rgba(68,136,255,0.5), 0 0 50px rgba(68,136,255,0.2); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(20px, -30px) scale(1.05); }
+  50% { transform: translate(-10px, -50px) scale(0.98); }
+  75% { transform: translate(-30px, -20px) scale(1.02); }
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-25px, 20px) scale(1.03); }
+  66% { transform: translate(15px, -15px) scale(0.97); }
+}
+
+@keyframes grid-scroll {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(48px, 48px); }
+}
+
+@keyframes row-reveal {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tier-glow {
+  0%, 100% { border-color: rgba(0,0,255,0.1); }
+  50% { border-color: rgba(0,0,255,0.4); }
+}
+
+@keyframes flow-arrow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+@keyframes terminal-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes terminal-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes radar-draw {
+  from { stroke-dashoffset: 1000; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes hero-reveal {
+  from { opacity: 0; transform: translateY(2rem); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+@keyframes diagram-shimmer {
+  0% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+  100% { opacity: 0.3; }
+}
+
+/* Utility classes */
+.animate-fade-in {
+  animation: fade-in 0.4s var(--ease-out-quart) both;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s var(--ease-out-quart) both;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.3s var(--ease-out-quart) both;
+}
+
+.animate-skeleton {
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+.animate-score-bar {
+  animation: score-bar-grow 0.8s var(--ease-out-quart) both;
+  transform-origin: left;
+}
+
+.animate-terminal-fade-in {
+  animation: terminal-fade-in 0.3s var(--ease-out-quart) both;
+}
+
+.animate-terminal-blink {
+  animation: terminal-blink 0.8s step-end infinite;
+}
+
+.animate-hero-reveal {
+  animation: hero-reveal 0.8s var(--ease-out-quint) both;
+}
+
+.animate-float {
+  animation: float 12s ease-in-out infinite;
+}
+
+.animate-float-slow {
+  animation: float-slow 18s ease-in-out infinite;
+}
+
+.animate-grid-scroll {
+  animation: grid-scroll 30s linear infinite;
+}
+
+.animate-data-flow {
+  animation: data-flow 2.5s ease-in-out infinite;
+}
+
+.animate-row-reveal {
+  animation: row-reveal 0.35s var(--ease-out-quart) both;
+}
+
+/* Pipeline tier glow cycle — 9s total loop (3s per tier) */
+.animate-tier-glow-1 {
+  animation: tier-pulse 2s ease-in-out 0s infinite;
+}
+.animate-tier-glow-2 {
+  animation: tier-pulse 2s ease-in-out 0.7s infinite;
+}
+.animate-tier-glow-3 {
+  animation: tier-pulse 2s ease-in-out 1.4s infinite;
+}
+
+/* Flow arrow shimmer */
+.animate-flow-arrow {
+  background: linear-gradient(90deg, transparent 0%, rgba(0,0,255,0.3) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: flow-arrow 2s linear infinite;
+}
+
+/* Stagger delay utility */
+.stagger-delay > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-delay > *:nth-child(2) { animation-delay: 80ms; }
+.stagger-delay > *:nth-child(3) { animation-delay: 160ms; }
+.stagger-delay > *:nth-child(4) { animation-delay: 240ms; }
+.stagger-delay > *:nth-child(5) { animation-delay: 320ms; }
+.stagger-delay > *:nth-child(6) { animation-delay: 400ms; }
+.stagger-delay > *:nth-child(7) { animation-delay: 480ms; }
+.stagger-delay > *:nth-child(8) { animation-delay: 560ms; }
+.stagger-delay > *:nth-child(9) { animation-delay: 640ms; }
+.stagger-delay > *:nth-child(10) { animation-delay: 720ms; }
+
+/* Row stagger for table/list children */
+.row-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.row-stagger > *:nth-child(2) { animation-delay: 40ms; }
+.row-stagger > *:nth-child(3) { animation-delay: 80ms; }
+.row-stagger > *:nth-child(4) { animation-delay: 120ms; }
+.row-stagger > *:nth-child(5) { animation-delay: 160ms; }
+.row-stagger > *:nth-child(6) { animation-delay: 200ms; }
+.row-stagger > *:nth-child(7) { animation-delay: 240ms; }
+.row-stagger > *:nth-child(8) { animation-delay: 280ms; }
+.row-stagger > *:nth-child(9) { animation-delay: 320ms; }
+.row-stagger > *:nth-child(10) { animation-delay: 360ms; }
+.row-stagger > *:nth-child(11) { animation-delay: 400ms; }
+.row-stagger > *:nth-child(12) { animation-delay: 440ms; }
+
+/* ─── Modal entrance ────────────────────────────── */
+
+@keyframes modal-bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.animate-modal-bar {
+  animation: modal-bar-grow 0.6s var(--ease-out-quart) both;
+  transform-origin: left;
+}
+
+/* Stagger for modal bars */
+.animate-modal-bar:nth-child(1) { animation-delay: 0.1s; }
+.animate-modal-bar:nth-child(2) { animation-delay: 0.2s; }
+.animate-modal-bar:nth-child(3) { animation-delay: 0.3s; }
+
+/* Reduced motion fallback for all animations */
+@media (prefers-reduced-motion: reduce) {
+  .animate-data-flow,
+  .animate-float,
+  .animate-float-slow,
+  .animate-grid-scroll,
+  .animate-tier-glow-1,
+  .animate-tier-glow-2,
+  .animate-tier-glow-3,
+  .animate-flow-arrow,
+  .animate-row-reveal,
+  .animate-modal-bar,
+  .animate-score-bar,
+  .animate-terminal-fade-in {
+    animation: none !important;
+  }
+  .animate-hero-reveal {
+    opacity: 1 !important;
+    filter: none !important;
+    transform: none !important;
+  }
+  .animate-fade-in-up {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .animate-scale-in {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* Body scroll lock */
+body.scroll-locked {
+  overflow: hidden;
+}

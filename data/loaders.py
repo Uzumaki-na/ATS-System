@@ -19,6 +19,7 @@ import spacy
 from pathlib import Path
 from collections import Counter
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -254,7 +255,13 @@ def parse_label(label: Any, score: float = 0.0) -> int:
             return 1
         else:
             return 0
-    
+
+    # B2: pass through numeric labels directly (new datasets have int 0/1/2)
+    if isinstance(label, (int, float)) and not pd.isna(label):
+        label_int = int(label)
+        if label_int in (0, 1, 2):
+            return label_int
+
     label_str = str(label).lower().strip()
     
     # Direct match
@@ -391,29 +398,44 @@ class CrossEncoderDataset(Dataset):
         tokenizer_name: str = "bert-base-uncased",
         max_seq_length: int = 512,
         is_training: bool = True,
-        config: Dict = None
+        config: Dict = None,
+        balance: bool = False
     ):
         """
         Initialize CrossEncoderDataset.
-        
+
         Args:
             data_path: Path to CSV file with score data
             tokenizer_name: Name of pretrained tokenizer
             max_seq_length: Maximum sequence length for tokenization
             is_training: Whether this is training data
             config: Configuration dictionary
+            balance: If True, oversample minority classes (Good Fit) at training
         """
         self.data_path = data_path
         self.max_seq_length = max_seq_length
         self.is_training = is_training
         self.config = config or {}
-        
+        self.balance = balance
+        # B2: read dedicated column names from config (null = use SEP convention)
+        ce_schema = self.config.get('dataset_schemas', {}).get('cross_encoder', {})
+        self.resume_col = ce_schema.get('resume_column')
+        self.jd_col = ce_schema.get('job_description_column')
+
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        
+
         # Load and preprocess data
         self.data = self._load_and_preprocess_data()
-        
+
+        # Pre-tokenize all pairs once (122K x 512-token pairs — avoids
+        # per-epoch tokenizer cost which dominates training time).
+        self._pre_tokenize()
+
+        # Oversample minority classes if balancing is enabled
+        if self.balance:
+            self._balance_classes()
+
         # Print statistics
         self._print_statistics()
     
@@ -430,36 +452,54 @@ class CrossEncoderDataset(Dataset):
         text_col = schema.get('text_column', 'text')
         score_col = schema.get('score_column', 'ats_score')
         label_col = schema.get('label_column', 'original_label')
-        
-        # Validate columns exist
-        required_cols = [text_col, score_col]
+        # B2: dedicated resume/JD columns (when set, read directly)
+        resume_col = schema.get('resume_column')
+        jd_col = schema.get('job_description_column')
+
+        # Validate columns exist — score is required; text is required only
+        # when neither resume_column nor job_description_column is set
+        required_cols = [score_col]
+        if not resume_col and not jd_col:
+            required_cols.append(text_col)
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
-            # Try alternative column names
-            if 'text' not in df.columns:
-                raise ValueError(f"Required columns not found: {required_cols}")
+            raise ValueError(f"Required columns not found: {missing_cols}")
         
         # Preprocess each row
         processed_data = []
         for idx, row in df.iterrows():
             try:
-                # Extract and clean text
-                text = clean_resume_text(row.get(text_col, row.get('text', '')))
-                
-                if not text or len(text) < 10:  # Skip very short texts
+                # B2: read dedicated columns when configured, fall back to text column
+                resume_text = ''
+                job_description = ''
+                if resume_col and resume_col in row.index:
+                    resume_text = str(row.get(resume_col, ''))
+                if jd_col and jd_col in row.index:
+                    job_description = str(row.get(jd_col, ''))
+
+                if resume_text and job_description:
+                    # Dedicated columns present — use them directly
+                    text = clean_resume_text(resume_text)
+                else:
+                    # Fallback to text column (SEP convention or single text)
+                    text = clean_resume_text(row.get(text_col, row.get('text', '')))
+
+                if not text or len(text) < 10:
                     continue
-                
+
                 # Validate and normalize score
                 score = validate_score(row.get(score_col, 0.0))
-                
+
                 # Parse label
                 label = parse_label(
                     row.get(label_col, None),
                     score
                 )
-                
+
                 processed_data.append({
                     'text': text,
+                    'resume_text': resume_text,
+                    'job_description': job_description,
                     'score': score,
                     'label': label,
                     'original_label': str(row.get(label_col, '')),
@@ -494,57 +534,131 @@ class CrossEncoderDataset(Dataset):
             label_name = {2: 'good_fit', 1: 'potential_fit', 0: 'bad_fit'}.get(label, 'unknown')
             print(f"  {label_name}: {count} ({100*count/len(labels):.1f}%)")
         print(f"{'='*60}\n")
-    
-    def __len__(self) -> int:
-        return len(self.data)
-    
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single training example."""
-        item = self.data[idx]
 
-        text = item.get('text', '')
-        resume_text = text
-        job_description = ''
-        if isinstance(text, str) and ' SEP ' in text:
-            resume_text, job_description = text.rsplit(' SEP ', 1)
+    def _pre_tokenize(self):
+        """Pre-tokenize all resume-JD pairs once and cache tensors in-place.
 
-        resume_text = resume_text.strip()
-        job_description = job_description.strip()
+        Runs the same text-resolution logic as ``__getitem__`` (dedicated columns
+        → SEP convention) so the per-epoch path is a trivial tensor lookup.
 
+        Batches tokenizer calls (500 pairs at once) — HF tokenizer accepts
+        parallel text lists internally in C++, yielding 2-10x speedup.
+        """
+        BATCH_SIZE = 500
+
+        # Phase 1: resolve text for all items, collect valid pairs
+        pairs = []  # (item, resume_text, job_description)
+        for item in self.data:
+            resume_text = item.get('resume_text', '')
+            job_description = item.get('job_description', '')
+            if not resume_text.strip():
+                text = item.get('text', '')
+                resume_text = text
+                job_description = ''
+                if isinstance(text, str) and ' SEP ' in text:
+                    resume_text, job_description = text.rsplit(' SEP ', 1)
+            resume_text = resume_text.strip()
+            job_description = job_description.strip()
+            if not job_description:
+                continue
+            pairs.append((item, resume_text, job_description))
+
+        # Phase 2: batch-tokenize
+        valid = []
+        # Detect truncation strategy once (model-level, not per-sample)
+        truncation_strategy = 'longest_first'
         try:
-            encoding = self.tokenizer(
-                resume_text,
-                job_description,
-                truncation='only_first',
-                max_length=self.max_seq_length,
-                padding='max_length',
-                return_tensors='pt'
-            )
-        except Exception:
-            encoding = self.tokenizer(
-                resume_text,
-                job_description,
+            self.tokenizer(
+                pairs[0][1], pairs[0][2],
                 truncation='longest_first',
                 max_length=self.max_seq_length,
                 padding='max_length',
-                return_tensors='pt'
+                return_tensors='pt',
             )
-        
-        # Get target values
-        score = torch.tensor(item['score'], dtype=torch.float32)
-        label = torch.tensor(item['label'], dtype=torch.long)
-        
-        result = {
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
-            'score': score,
-            'label': label,
-            'text': item['text'],
-            'row_idx': item.get('row_idx', idx)
-        }
+        except Exception:
+            truncation_strategy = 'only_first'
 
-        if 'token_type_ids' in encoding:
-            result['token_type_ids'] = encoding['token_type_ids'].squeeze(0)
+        for i in range(0, len(pairs), BATCH_SIZE):
+            batch = pairs[i:i + BATCH_SIZE]
+            resume_texts = [p[1] for p in batch]
+            jd_texts = [p[2] for p in batch]
+
+            enc = self.tokenizer(
+                resume_texts,
+                jd_texts,
+                truncation=truncation_strategy,
+                max_length=self.max_seq_length,
+                padding='max_length',
+                return_tensors='pt',
+            )
+
+            for j, (item, _, _) in enumerate(batch):
+                item['_input_ids'] = enc['input_ids'][j]
+                item['_attention_mask'] = enc['attention_mask'][j]
+                if 'token_type_ids' in enc:
+                    item['_token_type_ids'] = enc['token_type_ids'][j]
+                item['_score'] = torch.tensor(item['score'], dtype=torch.float32)
+                item['_label'] = torch.tensor(item['label'], dtype=torch.long)
+                valid.append(item)
+
+        if len(valid) < len(self.data):
+            removed = len(self.data) - len(valid)
+            print(f"[CrossEncoderDataset] Pre-tokenization: removed {removed} "
+                  f"invalid samples (no job description).")
+            self.data = valid
+
+    def _balance_classes(self):
+        """Oversample minority classes so each class has ~median count.
+
+        Good Fit (label=2) is severely underrepresented (~0.2%). We oversample it
+        (and moderately oversample Potential Fit) so the model sees a balanced
+        distribution each epoch instead of defaulting to always predicting Bad Fit.
+        """
+        from collections import Counter
+        labels = [item['label'] for item in self.data]
+        counts = Counter(labels)
+        counts_desc = {l: c for l, c in sorted(counts.items(), key=lambda x: x[1], reverse=True)}
+        majority_count = list(counts_desc.values())[0]
+        print(f"  [Balance] Before: {dict(counts_desc)}  Majority: {majority_count}")
+
+        oversampled = []
+        for item in self.data:
+            label = item['label']
+            if label == 2:  # Good Fit — oversample ~10x
+                repeat = max(1, majority_count // max(1, counts[label]))
+                for _ in range(min(repeat, 20)):  # cap at 20x
+                    oversampled.append(item)
+            elif label == 1:  # Potential Fit — oversample ~3x
+                repeat = max(1, majority_count // counts[label]) if counts[label] > 0 else 1
+                for _ in range(min(repeat, 5)):  # cap at 5x
+                    oversampled.append(item)
+            else:
+                oversampled.append(item)
+
+        import random
+        random.shuffle(oversampled)
+        self.data = oversampled
+
+        new_counts = Counter([item['label'] for item in self.data])
+        print(f"  [Balance] After:  {dict({l: c for l, c in sorted(new_counts.items())})}  Total: {len(self.data)}")
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get a single example (uses pre-tokenized cached tensors)."""
+        item = self.data[idx]
+
+        result = {
+            'input_ids': item['_input_ids'],
+            'attention_mask': item['_attention_mask'],
+            'score': item['_score'],
+            'label': item['_label'],
+            'text': item['text'],
+            'row_idx': item.get('row_idx', idx),
+        }
+        if '_token_type_ids' in item:
+            result['token_type_ids'] = item['_token_type_ids']
 
         return result
     
@@ -591,10 +705,14 @@ class CategoryDataset(Dataset):
         
         # Build category mapping
         self._build_category_mapping()
-        
+
+        # Pre-tokenize all samples (avoids per-epoch tokenizer calls — critical
+        # on Windows where num_workers=0 forces serial CPU tokenization).
+        self._pre_tokenize()
+
         # Print statistics
         self._print_statistics()
-    
+
     def _load_and_preprocess_data(self) -> List[Dict]:
         """Load data from CSV and apply preprocessing."""
         if not os.path.exists(self.data_path):
@@ -667,15 +785,43 @@ class CategoryDataset(Dataset):
         for cat, idx in self.category_to_idx.items():
             print(f"  {idx}: {cat}")
     
+    def _pre_tokenize(self):
+        """Pre-tokenize all samples once and cache tensors in-place.
+
+        Avoids calling the tokenizer on every ``__getitem__``, which is especially
+        costly on Windows where ``num_workers=0`` forces serial CPU tokenization
+        repeated each epoch.
+        """
+        for item in self.data:
+            enc = self.tokenizer(
+                item['text'],
+                truncation=True,
+                max_length=self.max_seq_length,
+                padding='max_length',
+                return_tensors='pt',
+            )
+            item['input_ids'] = enc['input_ids'].squeeze(0)
+            item['attention_mask'] = enc['attention_mask'].squeeze(0)
+
+    @property
+    def class_counts(self) -> torch.Tensor:
+        """Per-class sample counts for loss weighting."""
+        counts = torch.zeros(len(self.categories), dtype=torch.float32)
+        for item in self.data:
+            cat = item['category']
+            if cat in self.category_to_idx:
+                counts[self.category_to_idx[cat]] += 1.0
+        return counts
+
     def _print_statistics(self):
         """Print dataset statistics."""
         if not self.data:
             print(f"[WARNING] No valid data found in {self.data_path}")
             return
-        
+
         categories = [item['category'] for item in self.data]
         category_counts = Counter(categories)
-        
+
         print(f"\n{'='*60}")
         print(f"CategoryDataset Statistics:")
         print(f"{'='*60}")
@@ -687,36 +833,25 @@ class CategoryDataset(Dataset):
         if len(category_counts) > 10:
             print(f"  ... and {len(category_counts) - 10} more categories")
         print(f"{'='*60}\n")
-    
+
     def __len__(self) -> int:
         return len(self.data)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single example."""
+        """Get a single example (uses pre-tokenized cached tensors)."""
         item = self.data[idx]
-        
-        # Tokenize resume text
-        encoding = self.tokenizer(
-            item['text'],
-            truncation=True,
-            max_length=self.max_seq_length,
-            padding='max_length',
-            return_tensors='pt'
-        )
-        
-        # Get category label
+
         unknown_idx = self.category_to_idx.get('UNKNOWN', 0)
         category_idx = self.category_to_idx.get(item['category'], unknown_idx)
-        label = torch.tensor(category_idx, dtype=torch.long)
-        
+
         return {
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
-            'label': label,
+            'input_ids': item['input_ids'],
+            'attention_mask': item['attention_mask'],
+            'label': torch.tensor(category_idx, dtype=torch.long),
             'text': item['text'],
             'category': item['category'],
             'skills': item.get('skills', []),
-            'row_idx': item.get('row_idx', idx)
+            'row_idx': item.get('row_idx', idx),
         }
     
     def get_collate_fn(self):
@@ -829,10 +964,14 @@ class CombinedCategoryDataset(Dataset):
         
         # Build category mapping
         self._build_category_mapping()
-        
+
+        # Pre-tokenize all samples (avoids per-epoch tokenizer calls — critical
+        # on Windows where num_workers=0 forces serial CPU tokenization).
+        self._pre_tokenize()
+
         # Print statistics
         self._print_statistics()
-    
+
     def _load_pdf_data(self, max_samples: int = None) -> List[Dict]:
         """Load and extract text from PDF resumes."""
         if not self.pdf_dir or not os.path.exists(self.pdf_dir):
@@ -953,20 +1092,43 @@ class CombinedCategoryDataset(Dataset):
         for cat, idx in self.category_to_idx.items():
             print(f"  {idx}: {cat}")
     
+    def _pre_tokenize(self):
+        """Pre-tokenize all samples once and cache tensors in-place."""
+        for item in self.data:
+            enc = self.tokenizer(
+                item['text'],
+                truncation=True,
+                max_length=self.max_seq_length,
+                padding='max_length',
+                return_tensors='pt',
+            )
+            item['input_ids'] = enc['input_ids'].squeeze(0)
+            item['attention_mask'] = enc['attention_mask'].squeeze(0)
+
+    @property
+    def class_counts(self) -> torch.Tensor:
+        """Per-class sample counts for loss weighting."""
+        counts = torch.zeros(len(self.categories), dtype=torch.float32)
+        for item in self.data:
+            cat = item['category']
+            if cat in self.category_to_idx:
+                counts[self.category_to_idx[cat]] += 1.0
+        return counts
+
     def _print_statistics(self):
         """Print dataset statistics."""
         if not self.data:
             print(f"[WARNING] No valid data found")
             return
-        
+
         # Count by source
         csv_count = sum(1 for item in self.data if item.get('source') == 'csv')
         pdf_count = sum(1 for item in self.data if item.get('source') == 'pdf')
-        
+
         # Count by category
         categories = [item['category'] for item in self.data]
         category_counts = Counter(categories)
-        
+
         print(f"\n{'='*60}")
         print(f"CombinedCategoryDataset Statistics:")
         print(f"{'='*60}")
@@ -980,36 +1142,25 @@ class CombinedCategoryDataset(Dataset):
         if len(category_counts) > 10:
             print(f"  ... and {len(category_counts) - 10} more categories")
         print(f"{'='*60}\n")
-    
+
     def __len__(self) -> int:
         return len(self.data)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single example."""
+        """Get a single example (uses pre-tokenized cached tensors)."""
         item = self.data[idx]
-        
-        # Tokenize resume text
-        encoding = self.tokenizer(
-            item['text'],
-            truncation=True,
-            max_length=self.max_seq_length,
-            padding='max_length',
-            return_tensors='pt'
-        )
-        
-        # Get category label
+
         unknown_idx = self.category_to_idx.get('UNKNOWN', 0)
         category_idx = self.category_to_idx.get(item['category'], unknown_idx)
-        label = torch.tensor(category_idx, dtype=torch.long)
-        
+
         return {
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
-            'label': label,
+            'input_ids': item['input_ids'],
+            'attention_mask': item['attention_mask'],
+            'label': torch.tensor(category_idx, dtype=torch.long),
             'text': item['text'],
             'category': item['category'],
             'source': item.get('source', 'unknown'),
-            'id': item.get('id', str(idx))
+            'id': item.get('id', str(idx)),
         }
     
     def get_collate_fn(self):
@@ -1200,7 +1351,9 @@ class ExtractorDataset(Dataset):
             'entities': entities,
             'tokens': [token.text for token in doc],
             'pos_tags': [token.pos_ for token in doc],
-            'ner_tags': [ent.label_ if ent.text else 'O' for ent in doc.ents] + ['O'] * (len(doc) - len(list(doc.ents))),
+            # B7: removed junk ner_tags (was not per-token BIO; consumers assumed
+            # token-aligned labels and learned noise. If needed, build true IOB
+            # via doc[i].ent_iob_ / ent_type_).
             'noun_chunks': noun_chunks,
             'skills': item.get('skills', []),
             'row_idx': item.get('row_idx', idx)
@@ -1231,109 +1384,6 @@ class ExtractorDataset(Dataset):
         return collate_fn
 
 
-class HardNegativeDataset(Dataset):
-    """
-    Dataset for hard negative mining.
-    Contains pairs of resumes and job descriptions with similarity scores.
-    """
-    
-    def __init__(
-        self,
-        data_path: str,
-        tokenizer_name: str = "bert-base-uncased",
-        max_seq_length: int = 512,
-        similarity_threshold: float = 0.7,
-        config: Dict = None
-    ):
-        self.data_path = data_path
-        self.max_seq_length = max_seq_length
-        self.similarity_threshold = similarity_threshold
-        self.config = config or {}
-        
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        
-        # Load data
-        self.data = self._load_data()
-    
-    def _load_data(self) -> List[Dict]:
-        """Load resume-job pairs with similarity scores."""
-        if not os.path.exists(self.data_path):
-            return []
-        
-        if self.data_path.endswith('.csv'):
-            df = pd.read_csv(self.data_path, encoding='utf-8')
-            data = df.to_dict('records')
-        elif self.data_path.endswith('.json'):
-            with open(self.data_path, 'r') as f:
-                data = json.load(f)
-        else:
-            return []
-        
-        # Clean and validate data
-        cleaned_data = []
-        for item in data:
-            try:
-                resume_text = clean_resume_text(item.get('resume_text', item.get('text', '')))
-                if not resume_text or len(resume_text) < 20:
-                    continue
-                
-                cleaned_data.append({
-                    'resume_text': resume_text,
-                    'job_description': clean_resume_text(item.get('job_description', '')),
-                    'similarity': float(item.get('similarity', 0)),
-                    'label': str(item.get('label', 'unknown'))
-                })
-            except Exception:
-                continue
-        
-        # Filter by similarity threshold
-        filtered_data = [
-            item for item in cleaned_data 
-            if item.get('similarity', 0) >= self.similarity_threshold
-        ]
-        
-        return filtered_data
-    
-    def __len__(self) -> int:
-        return len(self.data)
-    
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a hard negative example."""
-        item = self.data[idx]
-        
-        # Tokenize
-        encoding = self.tokenizer(
-            item['resume_text'],
-            item.get('job_description', ''),
-            truncation=True,
-            max_length=self.max_seq_length,
-            padding='max_length',
-            return_tensors='pt'
-        )
-        
-        # Get similarity score
-        similarity = torch.tensor(item.get('similarity', 0), dtype=torch.float32)
-        
-        # Label: hard negative if score is low despite high similarity
-        is_hard_negative = 1 if item.get('label', '').lower() in ['bad_fit', 'bad'] else 0
-        label = torch.tensor(is_hard_negative, dtype=torch.long)
-        
-        result = {
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
-            'similarity': similarity,
-            'label': label,
-            'resume_text': item['resume_text'],
-            'job_description': item.get('job_description', '')
-        }
-
-        if 'token_type_ids' in encoding:
-            result['token_type_ids'] = encoding['token_type_ids'].squeeze(0)
-
-        return result
-
-
 # =============================================================================
 # DATALOADER CREATION FUNCTIONS
 # =============================================================================
@@ -1342,66 +1392,83 @@ def create_cross_encoder_loaders(
     train_path: str,
     val_path: str = None,
     batch_size: int = 16,
+    eval_batch_size: int = None,
     num_workers: int = 4,
     max_seq_length: int = 512,
     tokenizer_name: str = "bert-base-uncased",
-    config: Dict = None
+    config: Dict = None,
+    balance: bool = False,
 ) -> Dict[str, DataLoader]:
     """
     Create data loaders for Cross-Encoder model.
-    
+
     Args:
         train_path: Path to training data
         val_path: Path to validation data (optional)
         batch_size: Batch size
+        eval_batch_size: Eval batch size (defaults to batch_size to avoid OOM)
         num_workers: Number of data loading workers
         max_seq_length: Maximum sequence length
         tokenizer_name: Name of pretrained tokenizer
         config: Configuration dictionary
-        
+        balance: If True, oversample minority classes (Good Fit) at training
+
     Returns:
         Dictionary of data loaders
     """
+    if eval_batch_size is None:
+        eval_batch_size = batch_size
+
     dataloaders = {}
-    
-    # Training loader
-    if train_path and os.path.exists(train_path):
-        train_dataset = CrossEncoderDataset(
-            data_path=train_path,
+
+    # Build train and val datasets concurrently — they read different CSVs,
+    # and the HF tokenizer C++ backend releases the GIL, so ThreadPoolExecutor
+    # roughly halves wall-clock time.
+    def _build_dataset(path, is_training):
+        ds = CrossEncoderDataset(
+            data_path=path,
             tokenizer_name=tokenizer_name,
             max_seq_length=max_seq_length,
-            is_training=True,
-            config=config
+            is_training=is_training,
+            config=config,
+            balance=balance and is_training,  # only balance training set
         )
-        
-        dataloaders['train'] = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=True,
-            collate_fn=train_dataset.get_collate_fn()
-        )
-    
-    # Validation loader
-    if val_path and os.path.exists(val_path):
-        val_dataset = CrossEncoderDataset(
-            data_path=val_path,
-            tokenizer_name=tokenizer_name,
-            max_seq_length=max_seq_length,
-            is_training=False,
-            config=config
-        )
-        
-        dataloaders['val'] = DataLoader(
-            val_dataset,
-            batch_size=batch_size * 2,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
-            collate_fn=val_dataset.get_collate_fn()
-        )
-    
+        return ds
+
+    futures = {}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        if train_path and os.path.exists(train_path):
+            futures[executor.submit(_build_dataset, train_path, True)] = 'train'
+        if val_path and os.path.exists(val_path):
+            futures[executor.submit(_build_dataset, val_path, False)] = 'val'
+
+        train_dataset = None
+        for future in as_completed(futures):
+            key = futures[future]
+            dataset = future.result()
+            is_train = (key == 'train')
+            if is_train:
+                train_dataset = dataset
+            # persistent_workers=True keeps worker processes alive between epochs,
+            # avoiding Windows spawn deadlocks. Safe here because the dataset is
+            # pre-tokenized and fully static — no state to refresh each epoch.
+            pin = num_workers > 0 and torch.cuda.is_available()
+            dataloaders[key] = DataLoader(
+                dataset,
+                batch_size=batch_size if is_train else eval_batch_size,
+                shuffle=is_train,
+                num_workers=num_workers,
+                pin_memory=pin,
+                persistent_workers=num_workers > 0,
+                collate_fn=dataset.get_collate_fn(),
+            )
+
+        # Attach label distribution for class-weight computation
+        if train_dataset is not None:
+            from collections import Counter
+            labels = [item['label'] for item in train_dataset.data]
+            dataloaders['label_counts'] = dict(Counter(labels))
+
     return dataloaders
 
 
@@ -1584,79 +1651,6 @@ def create_extractor_loaders(
     return dataloaders
 
 
-def create_all_loaders(
-    config: Dict = None,
-    batch_size: int = None,
-    num_workers: int = 4
-) -> Dict[str, DataLoader]:
-    """
-    Create all data loaders based on configuration.
-    
-    Args:
-        config: Configuration dictionary (uses config module if not provided)
-        batch_size: Override batch size from config
-        num_workers: Number of data loading workers
-        
-    Returns:
-        Dictionary of all data loaders
-    """
-    # Use provided config or import from config module
-    if config is None:
-        try:
-            from config import config as app_config
-            config = app_config
-        except ImportError:
-            config = {}
-    
-    # Get batch size from config if not provided
-    if batch_size is None:
-        batch_size = config.get('models', {}).get('cross_encoder', {}).get('batch_size', 16)
-    
-    dataloaders = {}
-    
-    # Get data paths from config
-    data_config = config.get('data', {}).get('raw', {})
-    
-    # Cross-Encoder loaders
-    cross_config = data_config.get('cross_encoder', {})
-    if os.path.exists(cross_config.get('train', '')):
-        cross_loaders = create_cross_encoder_loaders(
-            train_path=cross_config.get('train'),
-            val_path=cross_config.get('validation'),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            max_seq_length=config.get('models', {}).get('cross_encoder', {}).get('max_seq_length', 512),
-            tokenizer_name=config.get('models', {}).get('cross_encoder', {}).get('pretrained_model', 'bert-base-uncased'),
-            config=config
-        )
-        dataloaders.update(cross_loaders)
-    
-    # Category Encoder loaders
-    if os.path.exists(data_config.get('category_resumes', '')):
-        cat_loaders = create_category_loaders(
-            data_path=data_config.get('category_resumes'),
-            batch_size=config.get('models', {}).get('category_encoder', {}).get('batch_size', 32),
-            num_workers=num_workers,
-            max_seq_length=config.get('models', {}).get('category_encoder', {}).get('max_seq_length', 256),
-            tokenizer_name=config.get('models', {}).get('category_encoder', {}).get('pretrained_model', 'distilbert-base-uncased'),
-            config=config
-        )
-        dataloaders.update(cat_loaders)
-    
-    # Extractor loaders
-    if os.path.exists(data_config.get('extraction_pairs', '')):
-        ext_loaders = create_extractor_loaders(
-            data_path=data_config.get('extraction_pairs'),
-            batch_size=config.get('models', {}).get('extractor', {}).get('batch_size', 32),
-            num_workers=num_workers,
-            nlp_model=config.get('models', {}).get('extractor', {}).get('spacy_model', 'en_core_web_sm'),
-            config=config
-        )
-        dataloaders.update(ext_loaders)
-    
-    return dataloaders
-
-
 # =============================================================================
 # INFERENCE UTILITIES
 # =============================================================================
@@ -1665,21 +1659,24 @@ def load_inference_batch(
     resumes: List[str],
     job_description: str,
     tokenizer_name: str = "bert-base-uncased",
-    max_seq_length: int = 512
+    max_seq_length: int = 512,
+    tokenizer=None  # I1: pass cached tokenizer to skip per-call load
 ) -> Dict[str, torch.Tensor]:
     """
     Create a batch for inference.
-    
+
     Args:
         resumes: List of resume texts
         job_description: Job description text
-        tokenizer_name: Name of pretrained tokenizer
+        tokenizer_name: Name of pretrained tokenizer (ignored if tokenizer passed)
         max_seq_length: Maximum sequence length
-        
+        tokenizer: optional pre-loaded tokenizer; skips from_pretrained when set
+
     Returns:
         Tokenized batch ready for model inference
     """
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     cleaned_job = clean_resume_text(job_description)
     cleaned_resumes = [clean_resume_text(resume) for resume in resumes]
@@ -1713,32 +1710,6 @@ def load_inference_batch(
         result['token_type_ids'] = encoding['token_type_ids']
 
     return result
-
-
-def prepare_resume_for_inference(
-    resume_text: str,
-    job_description: str = None
-) -> str:
-    """
-    Prepare a single resume for model inference.
-    
-    Args:
-        resume_text: Raw resume text
-        job_description: Optional job description for cross-encoder
-        
-    Returns:
-        Processed text ready for tokenization
-    """
-    # Clean the resume text
-    cleaned_text = clean_resume_text(resume_text)
-    
-    # If job description is provided, combine for cross-encoder
-    if job_description:
-        cleaned_job = clean_resume_text(job_description)
-        combined_text = f"{cleaned_text} SEP {cleaned_job}"
-        return combined_text
-    
-    return cleaned_text
 
 
 # =============================================================================

@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*", "*_test"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-config",
+    "--strict-markers",
+    "-p", "no:cacheprovider",
+]
+markers = [
+    "p0: Critical priority test — blocks core functionality",
+    "p1: High priority test — important feature or workflow",
+    "p2: Medium priority test — edge case or regression",
+    "p3: Low priority test — nice-to-have or exploratory",
+    "backend: Backend Python test",
+    "frontend: Frontend TypeScript test (placeholder for vitest)",
+    "e2e: End-to-end test (Playwright)",
+    "unit: Unit test — isolated function/class test",
+    "integration: Integration test — multiple components",
+    "component: Component test — UI component rendering",
+    "eval: Model evaluation test — accuracy/quality metrics",
+    "api: API endpoint test",
+    "pipeline: Pipeline orchestration test",
+    "pdf: PDF processing test",
+    "category: Category encoder test",
+    "extraction: Skill/extraction test",
+    "slow: Test that takes >5 seconds",
+    "model: Test that requires model loading",
+]
+
+[tool.coverage.run]
+source = ["api", "models", "pipeline", "data", "config.py"]
+omit = ["*/tests/*", "*/scripts/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "def __repr__",
+    "def __str__",
+]
+fail_under = 60

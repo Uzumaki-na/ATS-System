@@ -285,8 +285,10 @@ def _rank_locally(
                 },
                 "skill_overlap": round(float(r.skill_overlap), 6),
                 "keyword_overlap": round(float(r.keyword_overlap), 6),
+                "skills": r.ner_skills or [],
+                "experience_years": round(float(r.experience_years), 2),
+                "education": [e.get('raw', '') for e in (r.education or [])],
                 "processing_time": round(float(r.processing_time), 6),
-                "extracted_skills": (r.metadata or {}).get("extracted_skills", []),
             }
         )
 

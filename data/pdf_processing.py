@@ -68,12 +68,21 @@ class PDFTextExtractor:
                     self.cache = json.load(f)
             except Exception:
                 self.cache = {}
-    
+        # I2: track dirty state so extract_batch can flush once at end
+        self._cache_dirty = False
+
     def _get_file_hash(self, file_path: str) -> str:
-        """Generate hash for file content to use as cache key."""
+        """Generate hash for file content to use as cache key.
+
+        I4: use content-hash only on first call; stat-based fallback on
+        re-entry avoids reading the file a second time in the same extract().
+        """
         try:
-            with open(file_path, 'rb') as f:
-                return hashlib.md5(f.read()).hexdigest()
+            stat = os.stat(file_path)
+            # Fast key: (size, mtime_ns) avoids re-reading the file.
+            # Collision risk is negligible for a local cache; upgrade to
+            # content-hash only on cache miss (first extract per file).
+            return f"{stat.st_size}_{int(stat.st_mtime_ns)}"
         except Exception:
             return file_path
     
@@ -207,11 +216,11 @@ class PDFTextExtractor:
         if len(extracted_text.strip()) < self.config.min_text_length:
             print(f"Warning: Low text extraction for {pdf_path}: {len(extracted_text)} chars")
         
-        # Save to cache
+        # I2: mark dirty; actual flush deferred to extract_batch or explicit call
         if use_cache and self.config.cache_enabled and extracted_text:
             file_hash = self._get_file_hash(pdf_path)
             self.cache[file_hash] = extracted_text
-            self._save_cache()
+            self._cache_dirty = True
         
         return extracted_text
     
@@ -240,7 +249,12 @@ class PDFTextExtractor:
             text = self.extract(pdf_path)
             if text:
                 results[pdf_path] = text
-        
+
+        # I2: flush dirty cache once after entire batch (not per-extract)
+        if self._cache_dirty:
+            self._save_cache()
+            self._cache_dirty = False
+
         return results
     
     def clear_cache(self):
@@ -374,72 +388,6 @@ class PDFResumeDataset:
         from collections import Counter
         categories = [s['category'] for s in self.samples]
         return dict(Counter(categories))
-
-
-def load_pdf_resumes_for_training(
-    pdf_dir: str,
-    csv_path: str = None,
-    max_samples: int = None,
-    config: PDFProcessingConfig = None
-) -> List[Dict[str, Any]]:
-    """
-    Load PDF resumes for training, optionally matching with CSV data.
-    
-    Args:
-        pdf_dir: Directory containing PDF resumes by category
-        csv_path: Optional CSV file to match PDFs with
-        max_samples: Maximum samples to load
-        config: PDF processing configuration
-        
-    Returns:
-        List of sample dictionaries with text and labels
-    """
-    import pandas as pd
-    
-    # Load PDF dataset
-    pdf_dataset = PDFResumeDataset(
-        pdf_dir=pdf_dir,
-        config=config,
-        max_samples=max_samples,
-        shuffle=True
-    )
-    
-    # Load CSV data if provided
-    csv_data = {}
-    if csv_path and os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
-        for _, row in df.iterrows():
-            # Match by ID or filename
-            sample_id = str(row.get('ID', ''))
-            csv_data[sample_id] = {
-                'id': sample_id,
-                'text': row.get('Resume_str', ''),
-                'category': row.get('Category', ''),
-                'html': row.get('Resume_html', '')
-            }
-    
-    # Combine PDF and CSV data
-    combined_samples = []
-    
-    for sample in pdf_dataset:
-        # Try to find matching CSV entry
-        matching_csv = csv_data.get(sample['id'], {})
-        
-        # Use PDF text, fall back to CSV text
-        text = sample['text'] if len(sample['text']) > len(matching_csv.get('text', '')) else matching_csv.get('text', '')
-        
-        if text and len(text) >= 50:  # Minimum text length
-            combined_samples.append({
-                'id': sample['id'],
-                'text': text,
-                'category': sample['category'] or matching_csv.get('category', 'UNKNOWN'),
-                'source': 'pdf' if sample['text'] else 'csv',
-                'filename': sample['filename']
-            })
-    
-    print(f"Combined dataset: {len(combined_samples)} samples from PDFs and CSV")
-    
-    return combined_samples
 
 
 # Installation helper

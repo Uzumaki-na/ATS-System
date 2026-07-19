@@ -25,6 +25,12 @@ from spacy.training.example import Example
 from config import config
 from models.extractor import ResumeExtractor, HardNegativeMiner
 from data.loaders import ExtractorDataset, create_extractor_loaders
+from scripts.mlflow_tracking import (
+    setup_experiment,
+    log_params_from_config,
+    log_training_metrics,
+    log_artifacts,
+)
 
 
 # Configure logging
@@ -275,6 +281,11 @@ def train_extractor(args, training_data: list):
             if epoch % 10 == 0 or epoch == n_iter - 1:
                 avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
                 logger.info(f"Epoch {epoch + 1}/{n_iter}, Avg Loss: {avg_loss:.4f}, Batches: {batch_count}")
+                try:
+                    import mlflow
+                    mlflow.log_metric("train_loss", avg_loss, step=epoch + 1)
+                except Exception:
+                    pass
     
     # Save the model
     model_path = os.path.join(args.output_dir, 'extractor_model')
@@ -453,10 +464,32 @@ def main(args):
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
+    # ── MLflow setup ─────────────────────────────────────────────────────
+    import mlflow
+    exp_prefix = config.get("mlflow", {}).get("experiment_name_prefix", "")
+    experiment_name = f"{exp_prefix}extractor"
+    setup_experiment(config, experiment_name)
+    mlflow_run = mlflow.start_run(run_name=f"run_{datetime.now():%Y%m%d_%H%M%S}")
+    run_id = mlflow_run.info.run_id
+    logger.info("MLflow run %s started (experiment: %s)", run_id[:8], experiment_name)
+
+    # Merge config defaults with CLI overrides (CLI takes precedence)
+    training_params = dict(config.get("models", {}).get("extractor", {}))
+    training_params.update({
+        "data_path": args.data_path,
+        "spacy_model": args.spacy_model,
+        "epochs": str(args.epochs),
+        "batch_size": str(args.batch_size),
+        "similarity_threshold": str(args.similarity_threshold),
+        "train_split": str(args.train_split),
+        "val_split": str(args.val_split),
+    })
+    mlflow.log_params(training_params)
+
     # Log data path
     logger.info(f"Data file: {args.data_path}")
-    
+
     # Create data loaders using the new optimized loader
     logger.info("Creating data loaders...")
     loaders = create_extractor_loaders(
@@ -496,25 +529,22 @@ def main(args):
     training_data = prepare_spacy_training_data(full_dataset)
     
     if not training_data:
-        logger.warning("No entity annotations found in training data. Creating synthetic training data...")
-        # Fall back to extracting entities using existing NER
-        for idx in range(min(100, len(full_dataset))):
-            item = full_dataset[idx]
-            text = item['text']
-            
-            # Use spaCy to extract entities
-            doc = full_dataset.nlp(text)
-            entities = []
-            
-            for ent in doc.ents:
-                entities.append({
-                    'start': ent.start_char,
-                    'end': ent.end_char,
-                    'label': ent.label_
-                })
-            
-            if entities:
-                training_data.append((text, {'entities': entities}))
+        # B6: the original code fell back to self-distillation (running the
+        # model's own NER and using its output as "ground truth" labels),
+        # which produces zero new supervision — the "trained" model is
+        # identical to the pretrained one. Refuse to do that and tell the
+        # user what's needed instead.
+        logger.error(
+            "B6: No real entity annotations found in training data. "
+            "Self-distillation (using the model's own predictions as labels) "
+            "provides no new supervision and is no longer supported. "
+            "To train the extractor you need either:\n"
+            "  (a) a CSV with explicit entity columns (start/end/label spans), or\n"
+            "  (b) the category resume CSV (Resume.csv) which contains structured "
+            "HTML that can be parsed for entity spans.\n"
+            "The extractor will continue to use the pretrained spaCy model as-is."
+        )
+        sys.exit(1)
     
     if not training_data:
         logger.error("No training data available. Exiting.")
@@ -548,7 +578,15 @@ def main(args):
         
         if val_data:
             val_metrics = evaluate_extractor(nlp, val_data)
-    
+            try:
+                mlflow.log_metrics({
+                    f"val_{k}": float(v)
+                    for k, v in val_metrics.items()
+                    if isinstance(v, (int, float))
+                })
+            except Exception:
+                pass
+
     # Train hard negative miner
     logger.info("\n" + "="*60)
     logger.info("Training Hard Negative Miner")
@@ -577,14 +615,26 @@ def main(args):
     summary_path = os.path.join(args.output_dir, 'training_summary.json')
     with open(summary_path, 'w') as f:
         json.dump(summary, f, indent=2, default=str)
-    
+
+    # ── Log MLflow artifacts and end run ─────────────────────────────────
+    try:
+        log_artifacts(args.output_dir, artifact_path="checkpoints")
+        mlflow.log_artifact(summary_path, artifact_path="summary")
+        if val_metrics:
+            for k, v in val_metrics.items():
+                if isinstance(v, (int, float)):
+                    mlflow.log_metric(f"best_{k}", float(v))
+        mlflow.end_run()
+    except Exception as exc:
+        logger.warning("MLflow end-of-run logging failed: %s", exc)
+
     logger.info("\n" + "="*60)
     logger.info("Training Complete!")
     logger.info("="*60)
     logger.info(f"Model saved to: {os.path.join(args.output_dir, 'extractor_model')}")
     logger.info(f"Summary saved to: {summary_path}")
     logger.info("="*60)
-    
+
     return nlp, miner
 
 

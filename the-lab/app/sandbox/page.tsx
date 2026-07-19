@@ -2,8 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, type ChangeEvent, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
-import { CATEGORIES } from "@/lib/mock-data";
-import { rankPdfs, ApiError } from "@/lib/api";
+import { rankPdfs, ApiError, fetchCategories } from "@/lib/api";
 import Terminal from "@/components/terminal";
 import {
   Select,
@@ -50,6 +49,10 @@ export default function SandboxPage() {
   const [jdText, setJdText] = useState(SAMPLE_JD);
   const [files, setFiles] = useState<File[]>([]);
   const [category, setCategory] = useState("ENGINEERING");
+  // Runtime categories from GET /categories (backend is the single source of
+  // truth — no stale hardcoded list). Falls back to ["ENGINEERING"] on failure
+  // so submission still works (ENGINEERING is a valid backend category).
+  const [categories, setCategories] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -65,11 +68,19 @@ export default function SandboxPage() {
     try { sessionStorage.setItem("sandbox_category", category); } catch { /* noop */ }
   }, [category]);
 
+  // Fetch the real 24 categories at runtime (hydration-safe: only runs
+  // client-side after mount; SSR + first paint both render the loading state).
+  useEffect(() => {
+    fetchCategories()
+      .then(setCategories)
+      .catch(() => setCategories(["ENGINEERING"]));
+  }, []);
+
   /* ─── Handlers ──────────────────────────────────────────────── */
 
   const handleFilesAdded = useCallback((incoming: FileList | File[]) => {
     const MAX_FILES = 20;
-    const allowed = [".pdf", ".txt"];
+    const allowed = [".pdf"];
     const incomingArr = Array.from(incoming);
 
     const valid = incomingArr.filter((f) =>
@@ -77,7 +88,7 @@ export default function SandboxPage() {
     );
     const rejected = incomingArr.length - valid.length;
     if (rejected > 0) {
-      setError(`Only .pdf and .txt files are accepted. ${rejected} file(s) skipped.`);
+      setError(`Only .pdf files are accepted. ${rejected} file(s) skipped.`);
     }
 
     setFiles((prev) => {
@@ -217,12 +228,17 @@ export default function SandboxPage() {
             <label className="block font-mono text-[12px] uppercase tracking-[0.15em] text-[#666] mb-2">
               Category
             </label>
+            {/* Controlled for the component's whole lifetime (value never
+                undefined) — flipping uncontrolled→controlled on fetch triggers
+                a React/base-ui warning. category defaults to "ENGINEERING",
+                a valid backend category, so the disabled-while-loading gate
+                is the only loading affordance needed. */}
             <Select value={category} onValueChange={(v) => { if (v) setCategory(v); }}>
-              <SelectTrigger className="w-full" disabled={isProcessing}>
+              <SelectTrigger className="w-full" disabled={isProcessing || categories.length === 0}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CATEGORIES.map((cat) => (
+                {(categories.length ? categories : ["ENGINEERING"]).map((cat) => (
                   <SelectItem key={cat} value={cat}>{cat}</SelectItem>
                 ))}
               </SelectContent>
@@ -241,12 +257,12 @@ export default function SandboxPage() {
             )}
           >
             <p className="font-mono text-[14px] text-[#666] px-4 text-center pointer-events-none">
-              Drop .PDF or .TXT files here or click to browse
+              Drop .PDF files here or click to browse
             </p>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.txt"
+              accept=".pdf"
               multiple
               onChange={handleFileSelect}
               className="hidden"

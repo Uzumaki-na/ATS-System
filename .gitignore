@@ -20,7 +20,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Scoped to repo root: the packaging-template's bare `lib/` also matched
+# the-lab/lib/ (the frontend source dir), keeping api.ts/view-models.ts/
+# utils.ts untracked. /lib/ only ignores a top-level build artifact.
+/lib/
 lib64/
 parts/
 sdist/

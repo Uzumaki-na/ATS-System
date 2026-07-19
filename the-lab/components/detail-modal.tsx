@@ -3,7 +3,7 @@
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Candidate } from "@/lib/mock-data";
+import type { Candidate } from "@/lib/view-models";
 import ScoreRadar from "@/components/score-radar";
 
 interface DetailModalProps {

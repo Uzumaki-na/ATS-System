@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useState, useMemo, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { apiCandidateToView, type Candidate } from "@/lib/mock-data";
+import { apiCandidateToView, type Candidate } from "@/lib/view-models";
 import type { ApiRankResponse } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";

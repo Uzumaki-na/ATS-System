@@ -36,6 +36,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      data-scroll-behavior="smooth"
       className={`${crimsonPro.variable} ${ibmPlexMono.variable} h-full`}
     >
       <body className="min-h-dvh flex flex-col antialiased">

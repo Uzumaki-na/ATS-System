@@ -1,58 +1,30 @@
-version: "3.9"
+# TriadRank ATS — single CPU inference service.
+#
+# Configure in .env (gitignored; copy from .env.example):
+#   HF_TOKEN                 — read-scope token for the private checkpoint repos
+#   CHECKPOINT_REPO_CROSS    — e.g. Akuma1da/cross-encoder
+#   CHECKPOINT_REPO_CATEGORY — e.g. Akuma1da/category-encoder
+#
+# Trained checkpoints + base transformers models are fetched at first start into
+# the `hf-cache` named volume (mounts onto HF_HOME) and reused on every restart,
+# so the cold-download cost is paid exactly once per host.
 
 services:
   triadrank-ats:
     build:
       context: .
-      target: production
-      args:
-        PYTHON_IMAGE: python:3.10-slim
-        API_HOST: 0.0.0.0
-        API_PORT: 8000
-        MODEL_DEVICE: cpu
-        UVICORN_WORKERS: 4
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      API_HOST: 0.0.0.0
-      API_PORT: 8000
       MODEL_DEVICE: cpu
-      UVICORN_WORKERS: 4
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      UVICORN_WORKERS: 1
+    volumes:
+      - hf-cache:/opt/hf-cache
+    restart: unless-stopped
+    # HEALTHCHECK lives in the Dockerfile (single source of truth); it returns
+    # unhealthy when /health serves 503 (pipeline not ready, or random fallback).
 
-  triadrank-ats-gpu:
-    build:
-      context: .
-      target: gpu-production
-      args:
-        CUDA_IMAGE: nvidia/cuda:11.8-devel-ubuntu20.04
-        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu118
-        API_HOST: 0.0.0.0
-        API_PORT: 8000
-        MODEL_DEVICE: cuda
-        UVICORN_WORKERS: 4
-    ports:
-      - "8001:8000"
-    environment:
-      API_HOST: 0.0.0.0
-      API_PORT: 8000
-      MODEL_DEVICE: cuda
-      UVICORN_WORKERS: 4
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+volumes:
+  hf-cache:

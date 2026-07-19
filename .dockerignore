@@ -42,7 +42,6 @@ reports/
 # Large data/artifacts
 datasets/
 checkpoints/
-models/
 data/raw/
 data/processed/
 data/cache/
@@ -64,3 +63,23 @@ data/cache/
 **/*.zip
 **/*.7z
 **/*.joblib
+
+# Frontend (separate Next.js build with its own node_modules) — not in backend image
+the-lab/
+node_modules/
+
+# Tests + scratch (not needed at runtime)
+tests/
+test-artifacts/
+
+# Agent scaffolding + tool artifacts (21MB+ of non-runtime files)
+.claude/
+_bmad/
+_bmad-output/
+.impeccable/
+.playwright-cli/
+
+# Generated reference docs (kept locally, not in image)
+ANALYSIS_REPORT.md
+PRODUCT.md
+design.md

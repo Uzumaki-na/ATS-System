@@ -3,10 +3,11 @@ Main Pipeline: TriadRank Inference Engine
 Chains Model 3 (Extraction) → Model 2 (Category) → Model 1 (Scoring)
 """
 
+import os
 import torch
 import logging
 import warnings
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 import time
 from pathlib import Path
@@ -157,6 +158,71 @@ class TriadRankPipeline:
             return similarity
         return self.category_penalty
     
+    def _load_checkpoint(
+        self,
+        path: Optional[str],
+        loader,
+        repo_env: str,
+        cfg_key: str,
+        label: str,
+        ckpt_filename: str = "best_model.pt",
+    ) -> Tuple[Any, bool]:
+        """Load a trained checkpoint: local file → HuggingFace Hub fetch → fail-fast.
+
+        A model server must never silently serve random untrained weights in
+        production (the foot-gun this replaced logged a warning + from_config).
+        Resolution order:
+          1. Local file at `path` (resolved against project root) → load, trained=True.
+          2. HuggingFace Hub: fetch `ckpt_filename` from repo `os.environ[repo_env]`
+             (auth via HF_TOKEN, cache under HF_HOME) → load, trained=True.
+          3. Random fallback ONLY if ALLOW_RANDOM_FALLBACK=1 (dev/offline) → trained=False.
+          4. Otherwise raise FileNotFoundError so the container fails loudly.
+
+        Returns (model, trained_flag). Raises on fetch failure unless #3 applies.
+        """
+        resolved = _resolve_artifact_path(path)
+        if resolved and Path(resolved).exists():
+            logger.info(f"{label}: loading local checkpoint → {resolved}")
+            return loader(resolved, device=self.device), True
+
+        allow_random = os.environ.get("ALLOW_RANDOM_FALLBACK", "0") == "1"
+        if allow_random:
+            from_config = (
+                MultiHeadCrossEncoder.from_config
+                if cfg_key == "cross_encoder"
+                else CategoryEncoder.from_config
+            )
+            msg = (
+                "%s checkpoint missing and ALLOW_RANDOM_FALLBACK=1 — using random "
+                "UNTRAINED weights. Outputs will be noise."
+            )
+            logger.warning(msg, label)
+            warnings.warn(msg % label, stacklevel=2)
+            return from_config(config['models'][cfg_key]), False
+
+        repo = os.environ.get(repo_env)
+        if not repo:
+            raise FileNotFoundError(
+                f"{label} checkpoint not found at '{resolved or path}' and "
+                f"{repo_env} env is not set. Provide a HuggingFace repo id "
+                "(set HF_TOKEN if private), or set ALLOW_RANDOM_FALLBACK=1 for "
+                "dev random weights."
+            )
+        token = os.environ.get("HF_TOKEN") or None
+        cache = os.environ.get("HF_HOME") or None
+        logger.info(f"{label}: fetching checkpoint from HuggingFace Hub → {repo}")
+        from huggingface_hub import hf_hub_download
+        try:
+            ckpt_path = hf_hub_download(
+                repo_id=repo, filename=ckpt_filename, token=token, cache_dir=cache
+            )
+        except Exception as e:
+            raise FileNotFoundError(
+                f"Failed to fetch {label} checkpoint from HF repo '{repo}': {e}"
+            ) from e
+        logger.info(f"{label}: downloaded → {ckpt_path}")
+        return loader(ckpt_path, device=self.device), True
+
     def _init_models(
         self,
         model1_path: str,
@@ -183,26 +249,20 @@ class TriadRankPipeline:
         
         # Model 2: Category Encoder
         logger.info("Initializing Model 2: Category Encoder...")
-        resolved_model2_path = _resolve_artifact_path(model2_path)
-        if resolved_model2_path and Path(resolved_model2_path).exists():
-            self.model2 = CategoryEncoder.load(resolved_model2_path, device=self.device)
-            # B3: prefer the checkpoint's own label space over config['categories']
-            # (which may have a different class count, e.g. 24 vs 25).
-            if getattr(self.model2, 'id_to_name', None) is not None:
-                self.id_to_name = self.model2.id_to_name
-                self.name_to_id = self.model2.category_to_idx
-                logger.info(
-                    f"B3: Using checkpoint label mapping ({len(self.id_to_name)} classes)"
-                )
-        else:
-            msg = (
-                "Model 2 checkpoint not found at '%s' — falling back to random "
-                "UNTRAINED weights. All category predictions will be noise."
-            )
-            logger.warning(msg, resolved_model2_path)
-            warnings.warn(msg % resolved_model2_path, stacklevel=2)
-            self.model2 = CategoryEncoder.from_config(
-                config['models']['category_encoder']
+        self.model2, m2_trained = self._load_checkpoint(
+            model2_path,
+            loader=CategoryEncoder.load,
+            repo_env="CHECKPOINT_REPO_CATEGORY",
+            cfg_key="category_encoder",
+            label="Model 2 (category encoder)",
+        )
+        # B3: prefer the checkpoint's own label space over config['categories']
+        # (which may have a different class count, e.g. 24 vs 25).
+        if getattr(self.model2, 'id_to_name', None) is not None:
+            self.id_to_name = self.model2.id_to_name
+            self.name_to_id = self.model2.category_to_idx
+            logger.info(
+                f"B3: Using checkpoint label mapping ({len(self.id_to_name)} classes)"
             )
         self.model2.to(self.device)
         self.model2.eval()
@@ -210,22 +270,27 @@ class TriadRankPipeline:
         
         # Model 1: Cross-Encoder
         logger.info("Initializing Model 1: Cross-Encoder...")
-        resolved_model1_path = _resolve_artifact_path(model1_path)
-        if resolved_model1_path and Path(resolved_model1_path).exists():
-            self.model1 = MultiHeadCrossEncoder.load(resolved_model1_path, device=self.device)
-        else:
-            msg = (
-                "Model 1 checkpoint not found at '%s' — falling back to random "
-                "UNTRAINED weights. All scoring outputs will be noise."
-            )
-            logger.warning(msg, resolved_model1_path)
-            warnings.warn(msg % resolved_model1_path, stacklevel=2)
-            self.model1 = MultiHeadCrossEncoder.from_config(
-                config['models']['cross_encoder']
-            )
+        self.model1, m1_trained = self._load_checkpoint(
+            model1_path,
+            loader=MultiHeadCrossEncoder.load,
+            repo_env="CHECKPOINT_REPO_CROSS",
+            cfg_key="cross_encoder",
+            label="Model 1 (cross-encoder)",
+        )
         self.model1.to(self.device)
         self.model1.eval()
-        logger.info("Model 1 loaded successfully")
+
+        # Trained-weights flag: True only if BOTH learned models loaded real weights.
+        # /health uses this to report degraded (and now 503) on a container that
+        # fell back to random untrained weights — see api/main.py.
+        self._models_trained = bool(m1_trained and m2_trained)
+        if self._models_trained:
+            logger.info("Model 1 loaded successfully — trained weights active")
+        else:
+            logger.warning(
+                "Pipeline running on UNTRAINED random weights "
+                "(ALLOW_RANDOM_FALLBACK=1). /health will report degraded."
+            )
     
     def rank_candidates(
         self,

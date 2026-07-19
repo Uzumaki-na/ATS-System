@@ -39,16 +39,22 @@ async def lifespan(app: FastAPI):
     
     # Initialize pipeline on startup
     try:
+        # MODEL_DEVICE env overrides config (docker-compose sets cpu; config.yaml
+        # defaults to cuda). Falls back to config['inference']['device'] if unset.
+        device = os.environ.get("MODEL_DEVICE") or config['inference']['device']
         pipeline = TriadRankPipeline(
             model1_path=config['models']['cross_encoder'].get('save_path'),
             model2_path=config['models']['category_encoder'].get('save_path'),
             model3_spacy_model=config['models']['extractor'].get('spacy_model', 'en_core_web_sm'),
-            device=config['inference']['device'],
+            device=device,
             top_k=config['inference']['top_k'],
             category_penalty=config['penalties']['category_mismatch']
         )
         logger.info("Pipeline initialized successfully")
     except Exception as e:
+        # Fail-fast: a model server that can't load trained weights must not
+        # silently serve noise. Log loud, set pipeline=None so /health reports
+        # degraded (503), and let Docker's restart policy decide the rest.
         logger.error(f"Failed to initialize pipeline: {e}")
         pipeline = None
     
@@ -195,27 +201,35 @@ async def root():
 async def health_check():
     """
     Check the health status of the API and pipeline.
+
+    Returns HTTP 503 (Service Unavailable) when not healthy so Docker
+    healthchecks + orchestrators actually notice a broken container, instead
+    of 200-with-status=degraded which the prior version emitted and which lets
+    a random-weight fallback sail past every gate.
     """
     global pipeline
-    
+
     pipeline_ready = pipeline is not None
     models_loaded = False
-    
+
     if pipeline_ready:
-        models_loaded = (
-            hasattr(pipeline, 'model1') and 
-            hasattr(pipeline, 'model2') and 
-            hasattr(pipeline, 'extractor')
-        )
-    
-    status = "healthy" if (pipeline_ready and models_loaded) else "degraded"
-    
-    return HealthResponse(
+        # models_loaded now reflects TRAINED weights, not mere attribute presence
+        # (the old check passed for random-fallback models too). _models_trained
+        # is set in pipeline._init_models: False if ALLOW_RANDOM_FALLBACK was used.
+        models_loaded = bool(getattr(pipeline, '_models_trained', False))
+
+    healthy = pipeline_ready and models_loaded
+    status = "healthy" if healthy else "degraded"
+
+    response = HealthResponse(
         status=status,
         pipeline_ready=pipeline_ready,
         models_loaded=models_loaded,
         timestamp=datetime.utcnow().isoformat()
     )
+    if not healthy:
+        raise HTTPException(status_code=503, detail=response.model_dump())
+    return response
 
 
 @app.get("/categories", response_model=CategoryListResponse, summary="List Categories")

@@ -97,8 +97,10 @@ class TestCategoryEncoderAccuracy:
         tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased", token=False)
         from sklearn.metrics import accuracy_score
 
-        # Split: use last 20% as held-out
-        df = category_dataframe
+        # Split: shuffle first (Resume.csv is category-sorted — unshuffled last-20%
+        # covers only 5 of 24 cats), then use last 20% as held-out. Mirrors the
+        # cross-encoder test below (random_state=42) so both evals cover all cats.
+        df = category_dataframe.sample(frac=1, random_state=42).reset_index(drop=True)
         split_idx = int(len(df) * 0.8)
         held_out = df.iloc[split_idx:]
 

@@ -52,14 +52,18 @@ export interface Candidate {
 /* ─── API Response → View Model Mapper ──────────────────── */
 
 function _cleanCandidateId(id: string): string {
-  // "resume_john_doe.pdf" → "John Doe"
-  // "CAND-001" → "Candidate 001"
+  // Strip .pdf/.txt → spaces for _/- → titlecase WORD-INITIAL letters only
+  // (internal letters keep their case, never lowercased). If the result is
+  // still all-caps with NO digits, prefix "Candidate …"; digits defeat the
+  // all-caps check. Examples (asserted in tests/unit/view-models.test.ts):
+  //   "resume_john_doe.pdf" → "Resume John Doe"
+  //   "CAND-001"            → "CAND 001"
+  //   "ABC-DEF"             → "Candidate ABC DEF"
   const stripped = id.replace(/\.(pdf|txt)$/i, "");
   const cleaned = stripped
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .trim();
-  // If still all-caps (e.g. "CAND-001" → "Cand 001") flag it
   if (/^[A-Z\s]+$/.test(cleaned)) return `Candidate ${cleaned.replace(/\s+/g, " ")}`;
   return cleaned;
 }

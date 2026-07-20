@@ -162,6 +162,7 @@ reports/
 .playwright-cli/
 _bmad/
 _bmad-output/
+test-artifacts/
 
 # Generated reference documents (keep locally, not in repo)
 ANALYSIS_REPORT.md
@@ -177,7 +178,8 @@ rank_test_accountant_15.json
 # Generated skill/entity data
 skill_db_relax_20.json
 token_dist.json
-data/skill_db.json  # regenerate via scripts/build_skill_db.py
+# regenerate via scripts/build_skill_db.py
+data/skill_db.json
 
 # Standalone utility scripts (not imported by the core pipeline)
 scripts/evaluate_models.py
